@@ -1,0 +1,13 @@
+[Unit]
+Description=Check the WeChat Memory IP certificate every four hours
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=4h
+RandomizedDelaySec=15min
+Persistent=true
+Unit=certbot-renew.service
+
+[Install]
+WantedBy=timers.target
+

@@ -3,7 +3,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS schema_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
-) STRICT;
+);
 
 INSERT INTO schema_meta(key, value) VALUES ('schema_version', '1')
 ON CONFLICT(key) DO UPDATE SET value = excluded.value;
@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS customers (
     status TEXT NOT NULL CHECK (status IN ('active', 'disabled')),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
-) STRICT;
+);
 
 CREATE TABLE IF NOT EXISTS plans (
     id TEXT PRIMARY KEY,
@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS plans (
     active INTEGER NOT NULL CHECK (active IN (0, 1)),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
-) STRICT;
+);
 
 CREATE TABLE IF NOT EXISTS entitlements (
     id TEXT PRIMARY KEY,
@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS entitlements (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     CHECK (expires_at IS NULL OR expires_at > starts_at)
-) STRICT;
+);
 
 CREATE TABLE IF NOT EXISTS activation_credentials (
     id TEXT PRIMARY KEY,
@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS activation_credentials (
     created_at TEXT NOT NULL,
     last_used_at TEXT,
     revoked_at TEXT
-) STRICT;
+);
 
 CREATE TABLE IF NOT EXISTS devices (
     id TEXT PRIMARY KEY,
@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS devices (
     last_seen_at TEXT NOT NULL,
     deactivated_at TEXT,
     UNIQUE(entitlement_id, install_id)
-) STRICT;
+);
 
 CREATE TABLE IF NOT EXISTS audit_events (
     id INTEGER PRIMARY KEY,
@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
     subject_id TEXT NOT NULL,
     data_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL
-) STRICT;
+);
 
 CREATE INDEX IF NOT EXISTS idx_entitlements_customer
     ON entitlements(customer_id, status);
@@ -90,4 +90,3 @@ CREATE INDEX IF NOT EXISTS idx_audit_subject
     ON audit_events(subject_type, subject_id, created_at);
 
 PRAGMA user_version = 1;
-

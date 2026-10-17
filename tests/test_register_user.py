@@ -10,6 +10,11 @@ import register_user
 
 
 class RegistrationTests(unittest.TestCase):
+    def test_schema_is_compatible_with_el9_sqlite(self):
+        self.assertEqual(register_user.MIN_SQLITE_VERSION, (3, 34, 1))
+        schema = register_user.SCHEMA_PATH.read_text(encoding="utf-8")
+        self.assertNotRegex(schema, r"\)\s+STRICT\s*;")
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.db = Path(self.temp.name) / "license.sqlite3"

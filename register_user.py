@@ -24,6 +24,7 @@ from pathlib import Path
 
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
+MIN_SQLITE_VERSION = (3, 34, 1)
 PLAN_IDS = ("free", "permanent_personal", "pro_subscription")
 CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -84,6 +85,11 @@ def normalize_username(value: str) -> tuple[str, str]:
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
+    if sqlite3.sqlite_version_info < MIN_SQLITE_VERSION:
+        minimum = ".".join(str(part) for part in MIN_SQLITE_VERSION)
+        raise RegistrationError(
+            f"SQLite 版本过低：{sqlite3.sqlite_version}，最低需要 {minimum}"
+        )
     con = sqlite3.connect(db_path, timeout=5.0)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")
@@ -301,4 +307,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

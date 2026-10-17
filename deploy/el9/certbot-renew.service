@@ -1,0 +1,12 @@
+[Unit]
+Description=Renew the WeChat Memory IP short-lived certificate
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/certbot/bin/certbot renew --quiet --deploy-hook /usr/local/sbin/wkm-certbot-deploy
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+
