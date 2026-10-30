@@ -36,9 +36,11 @@ BASELINE_DOCUMENTS = (
     "docs/ONE_CLICK_DEPLOY_AND_ADMIN.md",
 )
 SOURCE_DIRECTORY = "/data/WeChatMemory-LicenseServer"
-PUBLIC_ENDPOINT = "https://104.244.90.172:9000"
+PUBLIC_ENDPOINT = "http://104.244.90.172:9000"
 RETIRED_PUBLIC_IP = "104.224.90.172"
 ADMIN_EMAIL = "gladlygrady@tutamail.com"
+CLIENT_VERSION = "0.3.5"
+RETIRED_CLIENT_VERSION = "0.3.4"
 LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
 SHELL_FENCE = re.compile(
     r"```(?:bash|sh|shell|zsh|powershell|pwsh)[^\n]*\n(.*?)```",
@@ -148,18 +150,67 @@ def check_repository(root: Path = ROOT) -> list[str]:
                 if expected not in text:
                     errors.append(f"{relative} is missing production default: {expected}")
 
+        for relative in (
+            "docs/LICENSE_SERVER_ARCHITECTURE.md",
+            "docs/MANUAL_DEPLOY_EL9_IP_CERT.md",
+        ):
+            path = ROOT / relative
+            if path.is_file():
+                text = _read(path, errors)
+                if f"`{CLIENT_VERSION}`" not in text:
+                    errors.append(
+                        f"{relative} is missing client baseline: {CLIENT_VERSION}"
+                    )
+                if (
+                    relative == "docs/LICENSE_SERVER_ARCHITECTURE.md"
+                    and f"客户端 `{RETIRED_CLIENT_VERSION}` 激活页" in text
+                ):
+                    errors.append(
+                        f"{relative} retains retired client baseline: "
+                        f"{RETIRED_CLIENT_VERSION}"
+                    )
+                if (
+                    relative == "docs/LICENSE_SERVER_ARCHITECTURE.md"
+                    and f"客户端 `{CLIENT_VERSION}` 激活页" not in text
+                ):
+                    errors.append(
+                        f"{relative} current-delivery line drifted from client "
+                        f"{CLIENT_VERSION}"
+                    )
+
+        for relative in (
+            "README.md",
+            "docs/ONE_CLICK_DEPLOY_AND_ADMIN.md",
+            "docs/MANUAL_DEPLOY_EL9_IP_CERT.md",
+            "docs/DOCUMENTATION_POLICY.md",
+        ):
+            path = ROOT / relative
+            if path.is_file():
+                text = _read(path, errors)
+                for expected in (
+                    "--ack-client-https-origin-ready",
+                    "Client `0.3.5`",
+                ):
+                    if expected not in text:
+                        errors.append(
+                            f"{relative} is missing HTTPS client compatibility gate: "
+                            f"{expected}"
+                        )
+
         script_expectations = {
             "deploy/el9/deploy-from-data.sh": (
                 f'SOURCE_DIR="{SOURCE_DIRECTORY}"',
                 f'ADMIN_EMAIL="{ADMIN_EMAIL}"',
                 'PUBLIC_IP="104.244.90.172"',
                 'PUBLIC_PORT="9000"',
+                'TLS_MODE="http"',
             ),
             "deploy/el9/one-click-deploy.sh": (
                 f'SOURCE_DIR="{SOURCE_DIRECTORY}"',
                 f'EMAIL="{ADMIN_EMAIL}"',
                 'PUBLIC_IP="104.244.90.172"',
                 'PUBLIC_PORT="9000"',
+                'TLS_MODE="http"',
             ),
         }
         for relative, expected_values in script_expectations.items():

@@ -1,6 +1,6 @@
 # WeChatMemory 授权服务审计与验收标准
 
-> 基线：服务端 `0.2.5`、SQLite schema 3、授权协议 v1；审计日期 2026-10-30。
+> 基线：服务端 `0.2.6`、SQLite schema 3、授权协议 v1；审计日期 2026-10-30。
 > 客户端数据不变量、真机矩阵和导出门禁见 `WeChatMemory-Client/docs/ACCEPTANCE_CRITERIA.md`。
 
 ## 1. 当前结论
@@ -11,7 +11,7 @@ SQLite 一致备份、顺序 migration 和 EL9 部署素材。本次审计未证
 许可证/SBOM 和候选前自动门禁都已形成源码候选；正式商业发布前仍有以下 P1：
 
 - `multi_account` 的产品限制语义尚未冻结和落地；
-- 隔离 EL9 上的部署故障注入、最终公网 TLS 与授权金丝雀尚无 E4 证据；
+- 隔离 EL9 上的部署故障注入、最终公网 HTTP 与授权金丝雀尚无 E4 证据；
 - 只有本机 SQLite 备份，没有加密异地副本、新鲜度告警和隔离恢复演练；
 - proprietary LICENSE 是工程基线，仍缺权利人与法律/隐私负责人的人工签字。
 
@@ -28,7 +28,9 @@ SQLite 一致备份、顺序 migration 和 EL9 部署素材。本次审计未证
 必须始终成立的授权不变量：
 
 1. 首次激活同时匹配用户和高熵激活码；用户不存在与码错误返回相同公开错误。
-2. 库中只存带 namespace 的激活码和 refresh token 摘要；明文只在创建/轮换响应中出现一次。
+2. 库中只存带 namespace 的激活码和 refresh token 摘要；激活码明文只在创建响应中出现一次，
+   首次成功激活必须在同一事务内原子吊销；后续及并发重放必须统一返回 401。
+   旧版遗留的 `status='active' AND last_used_at IS NOT NULL` 凭据也必须失败关闭，不得在升级后额外成功一次。
 3. refresh token 同时绑定 install ID、device hash、活跃设备和未过期 session；旧 token 重放必须失败。
 4. 票据为 Ed25519 签名的规范 JSON，并必含来自已验证 `devices` 行的 `device_id`、`install_id`、
    `device_hash`；任一签名、`key_id`、issuer/audience、设备绑定或时间顺序错误都不解锁。
@@ -36,6 +38,7 @@ SQLite 一致备份、顺序 migration 和 EL9 部署素材。本次审计未证
 6. 已验签但到期/暂停/撤销的权益只签发 `read_only`；无效签名不得因为历史激活而解锁。
 7. 设备解绑/封禁和默认的激活码重置必须撤销相关 refresh sessions。
 8. refresh session 保留清理只能删除超过保留期且终态时间有效的 `rotated/revoked`；`active` 永不删除，单次工作量必须有硬上限；`audit_events` 不属于该清理范围。
+9. 客户端 `platform`/`app_version` 和管理员创建的身份文本必须拒绝非可打印字符（包括 C0/C1、ANSI ESC 和 Unicode 双向控制）；管理 CLI 对历史脏数据必须输出可见 `\\uXXXX` 转义，不得把原始控制字符写入 root 终端。
 
 ## 3. 套餐 capability 合同
 
@@ -78,7 +81,7 @@ SQLite 一致备份、顺序 migration 和 EL9 部署素材。本次审计未证
 5. 在候选 release 中跑 migration 和自检；
 6. 原子切换应用、venv 和配置，重启；
 7. 检查本机 health/ready/keys，再切换 Nginx；
-8. 检查公网 TLS/SAN/ready/keys，再用专用金丝雀完成 activate → refresh → replay rejection；
+8. 检查公网 HTTP ready/keys，再用专用金丝雀完成 activate → 激活码重放拒绝 → refresh → refresh token 重放拒绝；
 9. 全部通过才标记完成。失败时恢复 Nginx（包括本次显式退役的站点文件）、`current`、`service.env`、systemd
    单元和服务状态；existing TLS 模式还必须按字节恢复覆盖前的证书与私钥。SQLite migration
    进入可写阶段后不自动降级；脚本必须明示备份位置和
@@ -121,26 +124,26 @@ SQLite 一致备份、顺序 migration 和 EL9 部署素材。本次审计未证
 | S-P1-03 | **源码关闭**：公网 `/readyz` 仅检查 schema 并进入应用限流；`/readyz/deep` 才执行 `quick_check`，仅允许 loopback，Nginx 对公网精确返回 404 | API/Nginx 合同回归通过；目标环境探针证据并入 S-P1-07 |
 | S-P1-04 | **源码关闭**：除廉价 `/healthz` 与仅本机 `/readyz/deep` 外，`/readyz`、`/v1/time`、`/v1/keys` 和授权路由均进入限流器；限流器同时维护每源和进程全局窗口、最多 4,096 个活跃 key，周期清理过期 key，键表满时拒绝陌生 key | 元数据 API 429/探针豁免、5,000 唯一来源、2,000 并发调用和时间推进回收测试通过 |
 | S-P1-05 | **源码候选已修复，待现场证据**：每个 release 使用自己的 `.venv`，systemd/CLI 通过 `current/.venv` 运行；候选依赖失败不修改旧 release | 在隔离 EL9 验收机注入 `after_application_switch` 故障，归档旧 release 指针、依赖和服务恢复证据 |
-| S-P1-06 | **源码候选已修复，待现场证据**：一键部署的外层补偿事务覆盖 `current`、`service.env`、systemd/Timer、Nginx 配置和服务状态；existing TLS 证书/私钥也在覆盖前捕获并按字节恢复 | 本地事务自测对证书/私钥执行 overwrite→fault→rollback→`cmp`；再在隔离 EL9 验收机分别注入 `after_application_install` 和 `after_nginx_switch`，验证恢复同一部署前快照 |
-| S-P1-07 | **部分修复，仍开放**：候选发布已强制私钥标记扫描、依赖闭包/精确 SBOM、严格编译、服务端全测、全部 EL9 Shell 语法和事务自测，且位于 env/DB/current 变更之前；候选树权限固定为目录 `0755`/普通文件 `0644`，仅 Git `100755` 精确白名单恢复执行位，pytest 由 `wkm-license` 非 root 运行；仍缺真实公网授权金丝雀和归档证据 | 使用专用金丝雀凭据在目标环境完成 activate → refresh → 旧 token 重放拒绝 → deactivate，保存 commit/schema/key-id/时间戳和脱敏结果 |
+| S-P1-06 | **源码候选已修复，待现场证据**：一键部署的外层补偿事务覆盖 `current`、`service.env`、systemd/Timer、Nginx 配置和服务状态；从旧 TLS 切换 HTTP 时项目专属 Certbot timer 也事务化停用；existing TLS 证书/私钥在覆盖前捕获并按字节恢复 | 本地事务自测对证书/私钥执行 overwrite→fault→rollback→`cmp`；再在隔离 EL9 验收机分别注入 `after_application_install` 和 `after_nginx_switch`，验证恢复同一部署前快照 |
+| S-P1-07 | **部分修复，仍开放**：候选发布已强制私钥标记扫描、依赖闭包/精确 SBOM、严格编译、服务端全测、全部 EL9 Shell 语法和事务自测，且位于 env/DB/current 变更之前；候选树权限固定为目录 `0755`/普通文件 `0644`，仅 Git `100755` 精确白名单恢复执行位，pytest 由 `wkm-license` 非 root 运行；仍缺真实公网授权金丝雀和归档证据 | 使用专用金丝雀凭据在目标环境完成 activate → 同激活码 401 → refresh → 旧 token 重放拒绝 → deactivate，保存 commit/schema/key-id/时间戳和脱敏结果 |
 | S-P1-08 | **源码关闭**：v1/v2/v3 使用连续顺序 SQL migration；全部 pending migration 在单一 `BEGIN IMMEDIATE` 中执行；原生 ledger 记录 SQL SHA，pre-ledger 旧库经版本化最低结构合同验证后记录 adoption 合同 SHA | fresh、真实历史 v1→v3 与 v2→v3 保数、incomplete schema 拒绝、失败全批回滚、已应用 SQL/ledger 漂移拒绝回归通过 |
 | S-P1-09 | 仅有本机 SQLite 备份；异地加密副本和恢复演练只在文档中 | 实际配置异地备份，产出新鲜度告警和月度恢复 RPO/RTO 证据 |
 | S-P1-10 | **工程材料关闭、人工审批仍开放**：仓库已有 proprietary `LICENSE`、11 个运行依赖通知、确定性 SPDX、精确约束和强制发布门禁 | 权利人、法律/隐私负责人完成适用地区、SaaS、EULA、隐私和第三方义务签字；补漏洞扫描审批记录 |
 | S-P1-11 | **源码关闭**：旧 `rotated/revoked` refresh sessions 使用状态专用部分索引、90 天默认保留、500 条固定批次和 20 批默认上限；备份成功后定时执行，HTTP 请求不清理 | active/近期/异常时间保留、过期终态清理、批量边界、并发与外键、v2→v3 数据保留、索引计划和 timer 顺序回归通过 |
-| S-P1-12 | **源码候选已修复，待现场证据**：共享主机默认只拥有专属 Nginx 文件，拒绝其他站点的 IP/端口冲突与并发漂移；只有操作员显式给出已停用且确实冲突的 conf.d 普通文件时才可事务退役，成功保留字节副本，失败恢复原路径，并发重建时拒绝覆盖；不启动已停止的 firewalld、不全量 reload、不改写其他 SELinux 端口类型；Certbot venv/unit/证书线全部专属 | 本地路径防护、无关站点拒绝、字节保留、成功记录、故障恢复和并发不覆盖回归通过；再在真实 EL9 主机完成 ACME、9000 TLS 与现场故障补偿 |
+| S-P1-12 | **源码候选已修复，待现场证据**：共享主机默认只拥有专属 Nginx 文件，拒绝其他站点的 IP/端口冲突与并发漂移；只有操作员显式给出已停用且确实冲突的 conf.d 普通文件时才可事务退役，成功保留字节副本，失败恢复原路径，并发重建时拒绝覆盖；不启动已停止的 firewalld、不全量 reload、不改写其他 SELinux 端口类型；默认 HTTP 不开放 80/安装 Certbot，历史项目 timer 被事务化停用 | 本地路径防护、HTTP 模板、无关站点拒绝、字节保留、成功记录、故障恢复和并发不覆盖回归通过；再在真实 EL9 主机完成 9000 HTTP 与现场故障补偿 |
 
 ### P2
 
 | 编号 | 问题 |
 |---|---|
 | S-P2-01 | **已关闭**：文档明确 `/readyz` 是廉价 schema 检查，`/readyz/deep` 是仅本机完整性检查；`/v1/keys`/签名 canary 是独立门禁 |
-| S-P2-02 | **已关闭**：单进程 Waitress 的每源/全局限流在应用层执行；Nginx 负责 TLS、可信转发头和阻断公网 deep probe |
+| S-P2-02 | **已关闭**：单进程 Waitress 的每源/全局限流在应用层执行；Nginx 负责公网 HTTP、可信转发头和阻断公网 deep probe |
 | S-P2-03 | 前置检查失败可留下未完整 release 目录；候选状态应与已发布状态分开 |
 | S-P2-04 | **已关闭**：refresh days、ticket hours、每源/全局限流和 key 上限都做整数、范围及全局≥每源校验，非法环境启动失败 |
 | S-P2-05 | 精确约束和 SBOM 可阻止版本漂移，但尚无带 SHA-256 的批准 wheelhouse 与自动漏洞扫描 |
 | S-P2-06 | **已关闭**：删除运行时不消费的 `PUBLIC_BASE_URL`、`APP_BIND`、`APP_PORT`、`LOG_LEVEL` 伪配置；loopback 地址由 systemd 固定，公网 URL 由部署参数和 Nginx 管理 |
 | S-P2-07 | **已关闭**：`/v1/time` 与 `/v1/keys` 不再绕过应用限流；只有廉价 liveness 和仅本机 deep probe 保持豁免 |
-| S-P2-08 | **已关闭**：Certbot 默认/文档统一为 `5.9.0`；一键部署除 `x.y.z` 格式外还做无整数溢出的数值比较，拒绝低于 `5.4.0` 的版本 |
+| S-P2-08 | **已关闭**：默认 HTTP 不依赖 Certbot；显式 letsencrypt 模式固定 `5.9.0`，并做格式与最低 `5.4.0` 数值门禁 |
 
 ## 8. 可直接修复与需用户决策
 
@@ -170,7 +173,7 @@ DISCOVER -> CHECK -> BUILD -> DEPLOY_CANDIDATE -> VERIFY -> PROMOTE
                 +---------- FIX/RETRY <----- ROLLBACK
 ```
 
-- 任一 P0/P1、测试、migration、备份、私钥、TLS、健康或金丝雀不通过都进入 `ROLLBACK`；
+- 任一 P0/P1、测试、migration、备份、私钥、HTTP 入口、健康或金丝雀不通过都进入 `ROLLBACK`；
 - 回滚后重新验证旧版 ready、activate/refresh、schema 和公钥；
 - 证据不足进入 `FIX/RETRY`，修复后从 `CHECK` 重跑全链，不跳过前置门禁；
 - 只有 `PROMOTE` 产生“已部署”记录，包含 commit、两端版本、schema、active key、哈希、恢复点和验收证据。
@@ -184,7 +187,7 @@ DISCOVER -> CHECK -> BUILD -> DEPLOY_CANDIDATE -> VERIFY -> PROMOTE
 - [ ] 全测试、安全扫描、负载和 Shell 故障注入通过；
 - [ ] 备份、migration、异地到达和隔离恢复通过；
 - [ ] 应用/Nginx/venv/config 补偿回滚通过；migration 后的数据库恢复边界和升级前备份经演练确认；
-- [ ] 本机与公网 TLS/health/ready/keys 通过；
+- [ ] 本机与公网 HTTP health/ready/keys 通过；
 - [ ] 金丝雀 activate → refresh → 旧 token 重放拒绝 → deactivate 通过；
 - [ ] `LICENSE`、第三方通知、SBOM、依赖锁定和法律审查记录齐全；
 - [ ] 发布证据包已异地保存。

@@ -1,7 +1,7 @@
 # 授权服务一键部署与用户授权运维手册
 
-> 目标：Enterprise Linux 9，公网 `https://104.244.90.172:9000`
-> 架构：Nginx TLS → `127.0.0.1:9100` 授权 API → 本机 SQLite3
+> 目标：Enterprise Linux 9，公网 `http://104.244.90.172:9000`
+> 架构：Nginx HTTP → `127.0.0.1:9100` 授权 API → 本机 SQLite3
 > 适用：首次安装、后续升级、新增用户、套餐调整、续期、停用和设备解绑
 > 文档导航见 [`README.md`](README.md)，值班、完整恢复和回滚见
 > [`SERVER_OPERATIONS_RUNBOOK.md`](SERVER_OPERATIONS_RUNBOOK.md)。
@@ -10,7 +10,7 @@
 
 ```mermaid
 flowchart LR
-    Client["Windows / Ubuntu 客户端"] -->|"HTTPS 9000"| Nginx["Nginx + IP 短期证书"]
+    Client["Windows / Ubuntu 客户端"] -->|"HTTP 9000"| Nginx["Nginx + 限流入口"]
     Nginx -->|"HTTP 127.0.0.1:9100"| API["Waitress 授权 API"]
     API --> DB["SQLite3 WAL"]
     API --> Key["Ed25519 签名私钥"]
@@ -23,19 +23,17 @@ flowchart LR
 服务端只接收用户名、激活码摘要、匿名设备标识、客户端版本和授权状态。聊天正文、图片、视频、语音、
 联系人、搜索词和微信数据库密钥不得上传。
 
+> **客户端兼容门禁：** Client `0.3.5` 只允许当前固定 HTTP origin；Client `0.3.4` 及更旧版固定
+> HTTPS，不能在 Server `0.2.6` 的 HTTP 入口刷新。已有用户必须协调发布 0.3.5/0.2.6，切换期依靠
+> 尚在 `offline_until` 内的已签名票据过渡。尚无生产用户时不构成阻断。
+
 ## 2. 部署前必须准备
 
 1. 服务器运行 RHEL 9、Rocky Linux 9、AlmaLinux 9、Oracle Linux 9 或 CentOS Stream 9；
-2. 云安全组和服务器都允许公网访问 `80/tcp`、`9000/tcp`；
-3. `104.244.90.172` 直接绑定当前服务器，80 端口没有被其他代理占用；
+2. 云安全组和服务器允许公网访问 `9000/tcp`；
+3. `104.244.90.172` 直接绑定当前服务器；
 4. 已通过 SSH 登录，当前账号具备 `sudo` 权限；
-5. 已准备运维邮箱；
-6. 证书通知与运维邮箱为 `gladlygrady@tutamail.com`；
-7. 已把与客户端公钥配对的 Ed25519 私钥安全上传到服务器，例如：
-8. **首次正式签发前的强制人工门禁**：必须先按
-   [手工部署 6.2](MANUAL_DEPLOY_EL9_IP_CERT.md#62-多业务服务器的无损-acme-排错)
-   在本机用 Host 头验证专属 webroot，再从服务器之外的电脑或移动网络访问同一探针并保存结果。
-   本机成功不能证明云安全组、EIP/NAT 和上游 ACL 允许 CA 访问；外部探针未成功时禁止运行正式 Certbot。
+5. 已把与客户端公钥配对的 Ed25519 私钥安全上传到服务器，例如：
 
 ```text
 /root/wkm-signing-ed25519.pem
@@ -73,9 +71,10 @@ ssh root@104.244.90.172 \
 候选 release 内的验证命令随后只派生公钥并与跟踪的 manifest 精确比对，输出被丢弃；
 任何元数据或公钥不匹配都会失败关闭。
 
-Let's Encrypt 的 IP 地址证书必须使用短期证书配置。Certbot 需要 5.4 或更高版本；本仓库默认固定
-`5.9.0`。一键部署同时校验 `x.y.z` 格式和数值下限，格式正确但低于 `5.4.0` 也会失败关闭。
-证书约 160 小时有效，续期自动化是生产必需条件。官方说明：
+默认 HTTP 部署不创建 ACME webroot、不开放 80 端口、不安装 Certbot venv，也不安装或启动证书
+续期 timer。若未来显式使用 `--tls-mode letsencrypt`，IP 地址证书必须使用短期证书配置；Certbot
+需要 5.4 或更高版本，本仓库默认固定 `5.9.0`。证书通知邮箱为
+`gladlygrady@tutamail.com`，并须先完成服务器内外两侧的 ACME 探针。官方说明：
 
 - <https://letsencrypt.org/2026/03/11/shorter-certs-certbot>
 - <https://letsencrypt.org/ca/docs/profiles/>
@@ -83,11 +82,11 @@ Let's Encrypt 的 IP 地址证书必须使用短期证书配置。Certbot 需要
 一键部署器会在安装软件、改防火墙、写 Nginx 或调用 Certbot 之前，用
 `ip -o -4 addr show scope global` 读取本机地址，并对 `--public-ip` 执行完全相等匹配。
 例如本机是 `104.244.90.172`，而参数误写成已退役的旧地址
-`104.224.90.172`，脚本会立即失败且不会进入
-Certbot。这是对输入错误和目标主机登录错误的强制门禁，不能用出站 IP 查询代替。
+`104.224.90.172`，脚本会立即失败且不会修改主机。这是对输入错误和目标主机登录错误的强制
+门禁，不能用出站 IP 查询代替。
 
 只有云平台不把 1:1 NAT/EIP 显示为本机 `scope global` 地址时，才可在人工核对绑定关系、
-NAT 转发和服务器外部 TCP/80 探针后显式加入 `--allow-unbound-public-ip`。该开关会输出醒目警告，
+NAT 转发和服务器外部 TCP/9000 探针后显式加入 `--allow-unbound-public-ip`。该开关会输出醒目警告，
 不会自动证明 NAT/EIP 配置正确，也不得用来绕过拼写不一致。
 
 ## 3. 首次一键部署
@@ -146,8 +145,9 @@ SHA-256 和替代入口。部署任一步失败会在 Nginx reload 前恢复原�
 该入口默认执行 `origin/main` fast-forward，并固定：
 
 - 源码目录：`/data/WeChatMemory-LicenseServer`；
-- 运维邮箱：`gladlygrady@tutamail.com`；
+- 可选 TLS 通知邮箱：`gladlygrady@tutamail.com`；
 - 公网入口：`104.244.90.172:9000`；
+- 传输模式：`http`；
 - 分支：`main`；
 - 只允许干净工作树。
 
@@ -157,7 +157,7 @@ SHA-256 和替代入口。部署任一步失败会在 Nginx reload 前恢复原�
 
 ### 3.3 直接执行底层部署器
 
-底层入口也可显式传入已确认的运维邮箱：
+默认 HTTP 的底层入口如下：
 
 ```bash
 cd /data/WeChatMemory-LicenseServer
@@ -166,7 +166,6 @@ sudo bash deploy/el9/one-click-deploy.sh \
   --source "$PWD" \
   --signing-key /root/wkm-signing-ed25519.pem \
   --key-id 2026-10-30 \
-  --email gladlygrady@tutamail.com \
   --public-ip 104.244.90.172 \
   --public-port 9000 \
   --firewall-zone public
@@ -175,16 +174,15 @@ sudo bash deploy/el9/one-click-deploy.sh \
 脚本会自动完成：
 
 1. 校验 EL9、IPv4、端口和源码，并在任何主机写操作之前确认公网 IP 精确存在于本机 `scope global` 列表，同时校验首次私钥源或已安装私钥的路径类型、owner 和 mode；候选 release 再反向计算公钥，确认它与仓库跟踪的公开清单一致；
-2. 安装 Nginx、SQLite、Python 3.11、firewalld、SELinux 工具和项目专属 Certbot 环境；
+2. 安装 Nginx、SQLite、Python 3.11、firewalld 和 SELinux 工具；默认不安装 Certbot；
 3. 创建 `wkm-license` 无登录系统账号；
-4. 在唯一的活动 firewalld zone 中精确增加规则（不全量 reload），配置 SELinux 和专属 ACME webroot；SELinux 为 Disabled 时完全跳过 `semanage`/`getsebool`/`setsebool`，为 Enforcing 或 Permissive 时先只读整张端口类型表，确认端口未分配才新增；已属于非 `http_port_t` 类型则失败关闭；
-5. 申请包含 `104.244.90.172` IP SAN 的受信任短期证书；
-6. 安装每四小时运行、只续期本 IP 证书的专属定时器；
-7. 创建不可变候选 release 源码目录；无论来自 Git 还是上传包，目录统一为 `0755`、普通文件统一为 `0644`，仅审计白名单中与 Git `100755` 完全一致的入口恢复 `0755`；目标缺失、出现符号链接或清单漂移均失败关闭；
-8. 对旧库创建并校验 SQLite 一致备份；
-9. 在候选 release 内扫描私钥标记，建立独立 `.venv`，验证依赖闭包与精确 SBOM，强制执行严格编译、服务端全测、全部 EL9 Shell 语法和部署事务自测；生产 venv 和一次性测试 venv 都保持 `root` owner，仅把 group 设为 `wkm-license` 并授予 `g+rX,o-rwx`，运行账号无写权；pytest 固定以无登录权限的 `wkm-license` 账号运行，测试替身即使失效也无权改写主机；校验签名私钥后再执行 SQLite init/migration；
-10. 安装 systemd 单元和每日备份定时器，原子切换 `current`，启动授权服务并通过本机 `/readyz/deep`；
-11. 切换 Nginx 生产配置，验证公网 HTTPS、证书 SAN、`/readyz` 和签名公钥接口。
+4. 在唯一的活动 firewalld zone 中只增加 `9000/tcp`（不全量 reload），配置 SELinux；SELinux 为 Disabled 时完全跳过 `semanage`/`getsebool`/`setsebool`，为 Enforcing 或 Permissive 时先只读整张端口类型表，确认端口未分配才新增；已属于非 `http_port_t` 类型则失败关闭；
+5. 默认停用本项目历史遗留的专属 Certbot timer，并保留证书和 venv 供未来显式 TLS 迁移；不触碰其他业务或系统级 Certbot timer；
+6. 创建不可变候选 release 源码目录；无论来自 Git 还是上传包，目录统一为 `0755`、普通文件统一为 `0644`，仅审计白名单中与 Git `100755` 完全一致的入口恢复 `0755`；目标缺失、出现符号链接或清单漂移均失败关闭；
+7. 对旧库创建并校验 SQLite 一致备份；
+8. 在候选 release 内扫描私钥标记，建立独立 `.venv`，验证依赖闭包与精确 SBOM，强制执行严格编译、服务端全测、全部 EL9 Shell 语法和部署事务自测；生产 venv 和一次性测试 venv 都保持 `root` owner，仅把 group 设为 `wkm-license` 并授予 `g+rX,o-rwx`，运行账号无写权；pytest 固定以无登录权限的 `wkm-license` 账号运行，测试替身即使失效也无权改写主机；校验签名私钥后再执行 SQLite init/migration；
+9. 安装 systemd 单元和每日备份定时器，原子切换 `current`，启动授权服务并通过本机 `/readyz/deep`；
+10. 切换 Nginx HTTP 生产配置，验证公网 `/readyz` 和签名公钥接口。
 
 在同机多业务环境，脚本默认只拥有
 `/etc/nginx/conf.d/wechat-memory-license.conf`：
@@ -194,8 +192,8 @@ sudo bash deploy/el9/one-click-deploy.sh \
 - 若目标文件不含项目 owner marker，也不符合旧版唯一特征，拒绝覆盖；
 - 若其他配置已声明 `104.244.90.172` 或监听 `9000`，拒绝抢占；
 - 写入前后会校验其他 Nginx 配置的摘要；部署期间它们发生变化就拒绝 reload；
-- 已运行的 Nginx 中 ACME 路由已经实际生效时，不做无意义 reload；新配置则先
-  `nginx -t`，再热加载，并用本地 Host 头探针验证。
+- 默认 HTTP 不创建或检查 ACME 路由；只有显式 `letsencrypt` 模式才用本地 Host 头验证专属
+  webroot；所有模式都先执行 `nginx -t` 再热加载。
 
 `entityecho.conf` 在本次迁移前同时声明了 `104.244.90.172`，会被默认冲突门禁拒绝；
 只能在业务已停用的前提下使用上述一次性退役参数。其他不抢占 IP/9000 的站点继续共存。
@@ -203,13 +201,15 @@ sudo bash deploy/el9/one-click-deploy.sh \
 
 脚本不会删除已经存在的数据库。升级前会先通过 SQLite `.backup` 创建一致性备份。候选版本的
 本机验收、Nginx 切换或公网验收失败时，脚本会恢复部署前的 `current`、`service.env`、
-systemd 单元/服务状态和 Nginx 配置/服务状态；`--tls-mode existing` 还会按字节恢复覆盖前的
+systemd 单元/服务状态和 Nginx 配置/服务状态；从旧 TLS 迁移到 HTTP 时，项目专属 Certbot timer
+的文件、启停状态也在事务内；`--tls-mode existing` 还会按字节恢复覆盖前的
 固定路径证书与私钥。但候选版本已经执行过的 SQLite migration 不会
 在服务可能产生新写入后自动降级；这时日志会明确提示备份和人工恢复边界。
 补偿回滚会只撤销本次新增的 firewalld 运行/永久规则、SELinux 端口和布尔值，不执行全局
 `firewall-cmd --reload`，也不会改写已属于其他 SELinux 类型的端口。它不卸载系统软件包、删除 Let's Encrypt 已签发证书、
 候选 release 或已安全安装但未激活的版本化签名私钥。这些不影响旧版运行态，保留用于取证或下次重试；
-确认不再需要后再按明确路径人工清理。进程被 `SIGKILL` 或主机掉电时 Shell 无法执行 EXIT 补偿，
+确认不再需要后再按明确路径人工清理。默认 HTTP 不产生新的证书或 Certbot 环境。进程被
+`SIGKILL` 或主机掉电时 Shell 无法执行 EXIT 补偿，
 事务快照会保留在 `/etc/wechat-memory-license/.one-click-transaction.*` 或 `.install-transaction.*`。下次部署会
 失败关闭，拒绝覆盖这些恢复证据。必须按统一运维手册核对 `current`、`service.env`、systemd、
 Nginx、`retired-nginx` 恢复副本和数据库备份，确认恢复完成后才能移走事务目录并重新开放流量。
@@ -218,9 +218,10 @@ Nginx、`retired-nginx` 恢复副本和数据库备份，确认恢复完成后�
 `WKM_DEPLOY_TEST_FAULT=after_nginx_retirement|after_application_install|after_nginx_switch`
 注入故障。生产日常部署不得设置这两个变量。
 
-### 3.4 使用已有受信任证书
+### 3.4 可选：使用已有受信任证书
 
-如果已经有包含该公网 IP SAN 的正式证书：
+当前 Client `0.3.5` 不兼容 HTTPS 入口，因此本节命令现在不得执行。只有先发布内置匹配 HTTPS
+origin/信任策略的新客户端，并确认升级覆盖率后，才可对包含该公网 IP SAN 的正式证书执行：
 
 ```bash
 sudo bash deploy/el9/one-click-deploy.sh \
@@ -228,6 +229,7 @@ sudo bash deploy/el9/one-click-deploy.sh \
   --signing-key /root/wkm-signing-ed25519.pem \
   --key-id 2026-10-30 \
   --tls-mode existing \
+  --ack-client-https-origin-ready \
   --tls-cert /root/tls/fullchain.pem \
   --tls-key /root/tls/privkey.pem
 ```
@@ -241,40 +243,50 @@ sudo bash deploy/el9/one-click-deploy.sh \
 existing 证书会复制到 Nginx 固定路径。复制前脚本捕获旧证书和私钥；证书校验、应用安装、
 Nginx 切换或公网验收任一步失败，都会在恢复旧 Nginx 配置并 reload 前先按字节恢复这两个文件。
 
-正式客户端不能使用自签名证书，也不能关闭 TLS 证书校验。
+### 3.5 可选：重新启用 Let's Encrypt
+
+同样，只有已先发布支持匹配 HTTPS origin/信任策略的新客户端时才可执行；当前 Client `0.3.5`
+不兼容。确认参数不是绕过开关，而是对客户端先行发布的运维记录：
+
+```bash
+sudo bash deploy/el9/deploy-from-data.sh \
+  --tls-mode letsencrypt \
+  --ack-client-https-origin-ready \
+  --email gladlygrady@tutamail.com \
+  --firewall-zone public
+```
+
+该模式才会开放 HTTP/80、创建 ACME webroot、安装项目专属 Certbot venv 和续期 timer。详细前置
+探针、证书限制和排障见 [`MANUAL_DEPLOY_EL9_IP_CERT.md`](MANUAL_DEPLOY_EL9_IP_CERT.md)。外部探针未成功时禁止运行正式 Certbot。
 
 ## 4. 部署后验收
 
 ```bash
 sudo systemctl status wechat-memory-license --no-pager
 sudo systemctl status nginx --no-pager
-sudo systemctl status wechat-memory-certbot-renew.timer --no-pager
 sudo systemctl status wechat-memory-license-backup.timer --no-pager
 
 curl --fail --silent --show-error http://127.0.0.1:9100/readyz/deep
-curl --fail --silent --show-error https://104.244.90.172:9000/readyz
-curl --fail --silent --show-error https://104.244.90.172:9000/v1/keys
+curl --fail --silent --show-error http://104.244.90.172:9000/readyz
+curl --fail --silent --show-error http://104.244.90.172:9000/v1/keys
 ```
 
 检查监听范围：
 
 ```bash
-sudo ss -lntp | grep -E ':(80|9000|9100)\b'
+sudo ss -lntp | grep -E ':(9000|9100)\b'
 ```
 
 正确结果：
 
-- `80`：Nginx 公网监听，只服务 ACME challenge；
-- `9000`：Nginx 公网 HTTPS；
+- `9000`：Nginx 公网 HTTP；
 - `9100`：只能是 `127.0.0.1:9100`；
 - SQLite 没有网络监听端口。
 
-检查证书：
+默认部署不应存在启用中的项目证书 timer：
 
 ```bash
-sudo openssl x509 \
-  -in /etc/letsencrypt/live/104.244.90.172/fullchain.pem \
-  -noout -issuer -subject -dates -ext subjectAltName
+sudo systemctl is-enabled wechat-memory-certbot-renew.timer 2>/dev/null || true
 ```
 
 ## 5. 后续升级
@@ -287,7 +299,7 @@ git rev-parse --short HEAD
 sudo bash deploy/el9/deploy-from-data.sh
 ```
 
-签名私钥和证书已经安装后不需要再次传入。不要随意更换 `key-id` 或签名私钥；客户端必须提前内置
+签名私钥已经安装后不需要再次传入。不要随意更换 `key-id` 或签名私钥；客户端必须提前内置
 对应公钥，才能完成安全轮换。
 完整的密钥创建、公开清单发布、客户端同步、备份和轮换步骤见
 [`SIGNING_KEY_OPERATIONS.md`](SIGNING_KEY_OPERATIONS.md)。
@@ -446,7 +458,19 @@ sudo wkm-license-admin reset-code --username alice
 sudo wkm-license-admin reset-code --username alice --keep-sessions
 ```
 
+由于激活码首次成功使用后就失效，套餐允许多设备时，为第二台或第三台设备发码必须先执行
+`reset-code --keep-sessions`。不带 `--keep-sessions` 的默认重置会撤销已有设备的 refresh session，它们在
+下次刷新时会失效；这只适合账号凭据泄漏或明确要求所有设备重新激活的情况。
+
+服务端也可能已提交“消费激活码 + 绑定设备 + 生成会话”事务，但 HTTP 响应在到达客户端前丢失。
+此时同码重试必须返回 401，不能为了“幂等”重用旧码。管理员核对用户与设备后，执行
+`reset-code --keep-sessions` 生成新码；只有在应撤销全部现有会话时才使用不带该参数的 `reset-code`。
+
 审计日志只记录“发生了重置”和是否撤销会话，不记录新旧激活码明文。
+
+从 Server `0.2.5` 或更旧版升级时，旧版可能已填写 `last_used_at` 却仍把凭据留为 `active`。
+`0.2.6` 对这类历史已用码统一返回 401，不会在升级后再允许重放一次。需要新设备激活时，管理员必须
+使用 `reset-code --keep-sessions` 生成新码；不得人工清空 `last_used_at` 或修改旧摘要。
 
 ## 10. 设备解绑和封禁
 
@@ -571,7 +595,7 @@ sudo tail -n 100 /var/log/nginx/wechat-memory-license.error.log
 sudo tail -n 100 /var/log/nginx/wechat-memory-license.access.log
 ```
 
-证书续期：
+可选 letsencrypt 模式的证书续期：
 
 ```bash
 sudo systemctl status wechat-memory-certbot-renew.timer --no-pager
@@ -605,8 +629,8 @@ sudo -u wkm-license sqlite3 /var/lib/wechat-memory-license/license.sqlite3 \
 ## 15. 上线安全检查
 
 - [ ] 9100 未对公网开放；
-- [ ] 9000 使用受信任且包含公网 IP SAN 的证书；
-- [ ] Certbot 续期 timer 正常；
+- [ ] 9000 为 Nginx HTTP，9100 只监听 loopback；
+- [ ] 默认 HTTP 没有启用项目 Certbot timer；若显式 TLS，则证书和续期另行验收；
 - [ ] SQLite 仅 `wkm-license` 可写；
 - [ ] 签名私钥不在 Git 和普通备份中；
 - [ ] 日志中没有激活码、refresh token 或数据库密钥；

@@ -77,8 +77,10 @@ wkm_write_retired_nginx_record() {
   local original_path="${2:-}"
   local public_ip="${3:-}"
   local public_port="${4:-}"
+  local public_scheme="${5:-http}"
   local temporary=""
   [[ "${status}" == "pending" || "${status}" == "committed" ]] || return 2
+  [[ "${public_scheme}" == "http" || "${public_scheme}" == "https" ]] || return 2
   [[ -n "${WKM_RETIRED_NGINX_RECORD}" ]] || return 2
   temporary="${WKM_RETIRED_NGINX_RECORD}.tmp.$$"
   rm -f -- "${temporary}"
@@ -91,7 +93,8 @@ wkm_write_retired_nginx_record() {
       printf 'original_path=%s\n' "${original_path}"
       printf 'retired_path=%s\n' "${WKM_RETIRED_NGINX_FILE}"
       printf 'sha256=%s\n' "${WKM_RETIRED_NGINX_SHA256}"
-      printf 'replacement_endpoint=https://%s:%s\n' "${public_ip}" "${public_port}"
+      printf 'replacement_endpoint=%s://%s:%s\n' \
+        "${public_scheme}" "${public_ip}" "${public_port}"
     } >"${temporary}"
   ); then
     rm -f -- "${temporary}"
@@ -111,6 +114,7 @@ wkm_retire_nginx_conf() {
   local label="$4"
   local public_ip="$5"
   local public_port="$6"
+  local public_scheme="${7:-http}"
   local basename=""
   local moved_hash=""
 
@@ -162,13 +166,15 @@ wkm_retire_nginx_conf() {
     echo "退役文件在捕获与移动之间发生变化，拒绝部署并保留取证副本：${WKM_RETIRED_NGINX_FILE}" >&2
     return 2
   fi
-  wkm_write_retired_nginx_record pending "${source}" "${public_ip}" "${public_port}"
+  wkm_write_retired_nginx_record pending "${source}" "${public_ip}" \
+    "${public_port}" "${public_scheme}"
 }
 
 wkm_finalize_retired_nginx_conf() {
   local original_path="$1"
   local public_ip="$2"
   local public_port="$3"
+  local public_scheme="${4:-http}"
   local actual_hash=""
   [[ -n "${WKM_RETIRED_NGINX_FILE}" ]] || return 0
   if [[ -L "${WKM_RETIRED_NGINX_FILE}" || ! -f "${WKM_RETIRED_NGINX_FILE}" ]]; then
@@ -181,7 +187,7 @@ wkm_finalize_retired_nginx_conf() {
     return 2
   fi
   wkm_write_retired_nginx_record committed \
-    "${original_path}" "${public_ip}" "${public_port}"
+    "${original_path}" "${public_ip}" "${public_port}" "${public_scheme}"
 }
 
 wkm_restore_retired_nginx_conf() {

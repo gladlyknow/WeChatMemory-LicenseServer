@@ -50,12 +50,14 @@ class DocumentationContractTests(unittest.TestCase):
                     f'ADMIN_EMAIL="{CHECKER.ADMIN_EMAIL}"',
                     'PUBLIC_IP="104.244.90.172"',
                     'PUBLIC_PORT="9000"',
+                    'TLS_MODE="http"',
                 ),
                 "deploy/el9/one-click-deploy.sh": (
                     f'SOURCE_DIR="{CHECKER.SOURCE_DIRECTORY}"',
                     f'EMAIL="{CHECKER.ADMIN_EMAIL}"',
                     'PUBLIC_IP="104.244.90.172"',
                     'PUBLIC_PORT="9000"',
+                    'TLS_MODE="http"',
                 ),
             }.items():
                 path = root / relative

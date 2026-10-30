@@ -126,6 +126,10 @@ REQUIRED_RELEASE_DOCUMENTS=(
   docs/SIGNING_KEY_OPERATIONS.md
   docs/DEPLOYMENT_104.244.90.172.md
   deploy/el9/deployment-transaction.sh
+  deploy/el9/nginx-bootstrap.conf
+  deploy/el9/nginx-production.conf
+  deploy/el9/nginx-production-existing-tls.conf
+  deploy/el9/nginx-production-tls.conf
   deploy/el9/release-permissions.sh
   deploy/el9/signing-key-safety.sh
   deploy/el9/shared-host-safety.sh
@@ -133,6 +137,7 @@ REQUIRED_RELEASE_DOCUMENTS=(
   sbom/server-runtime.spdx.json
   scripts/check_documentation.py
   scripts/generate_sbom.py
+  scripts/service_preflight.py
   requirements.lock
 )
 for required_document in "${REQUIRED_RELEASE_DOCUMENTS[@]}"; do
@@ -311,6 +316,65 @@ restore_unit_state() {
   return "${failed}"
 }
 
+redact_service_diagnostics() {
+  # Diagnostics are only for startup triage.  Drop the entire line whenever it
+  # could contain a credential; partial substitution is too easy to get wrong
+  # for quoted JSON, systemd output and arbitrary exception messages.
+  sed -E \
+    -e '/-----BEGIN .*PRIVATE KEY-----/,/-----END .*PRIVATE KEY-----/c\[REDACTED-PRIVATE-KEY-BLOCK]' \
+    -e '/PRIVATE KEY|activation[_ -]?code|refresh[_ -]?token|authorization|Bearer[[:space:]]|WKM1-|wkmr_/I s/.*/[REDACTED-SENSITIVE-LINE]/'
+}
+
+diagnose_path_metadata() {
+  local label="$1"
+  local path="$2"
+  local readable="no"
+  local executable="no"
+  if [[ -e "${path}" || -L "${path}" ]]; then
+    /usr/sbin/runuser -u wkm-license -- test -r "${path}" && readable="yes"
+    /usr/sbin/runuser -u wkm-license -- test -x "${path}" && executable="yes"
+    stat -Lc "${label}: type=%F owner=%U:%G mode=%a readable=${readable} executable=${executable}" \
+      "${path}" 2>&1 || true
+  else
+    echo "${label}: missing"
+  fi
+}
+
+emit_service_failure_diagnostics() {
+  echo "--- systemd 结构化状态（wechat-memory-license）---" >&2
+  systemctl show wechat-memory-license \
+    -p ActiveState -p SubState -p Result -p ExecMainCode -p ExecMainStatus \
+    -p NRestarts -p ConditionResult -p AssertResult --no-pager 2>&1 | \
+    redact_service_diagnostics >&2 || true
+  echo "--- 脱敏 systemd 状态（wechat-memory-license）---" >&2
+  systemctl status wechat-memory-license --no-pager -l 2>&1 | \
+    redact_service_diagnostics >&2 || true
+  echo "--- 9100 监听 ---" >&2
+  ss -lntp 2>&1 | awk '$4 ~ /:9100$/ {print}' | \
+    redact_service_diagnostics >&2 || true
+  echo "--- 关键路径元数据（不读取文件内容）---" >&2
+  {
+    diagnose_path_metadata current "${CURRENT_LINK}"
+    diagnose_path_metadata python "${CURRENT_LINK}/.venv/bin/python"
+    diagnose_path_metadata service_env "${ENV_PATH}"
+    diagnose_path_metadata signing_key "${KEY_PATH}"
+    diagnose_path_metadata public_manifest \
+      "${CURRENT_LINK}/config/signing-public-keys.json"
+    diagnose_path_metadata database "${DATABASE_PATH}"
+  } | redact_service_diagnostics >&2 || true
+  echo "--- SELinux 模式 ---" >&2
+  if command -v getenforce >/dev/null 2>&1; then
+    getenforce 2>&1 | redact_service_diagnostics >&2 || true
+  else
+    echo "getenforce unavailable" >&2
+  fi
+  echo "--- 本次启动的脱敏 journal（最多 80 行）---" >&2
+  journalctl -u wechat-memory-license \
+    --since "${SERVICE_START_DIAGNOSTIC_SINCE:--5 minutes}" \
+    -n 80 --no-pager -o short-iso 2>&1 | \
+    redact_service_diagnostics >&2 || true
+}
+
 rollback_install_runtime() {
   local failed=0
   echo "候选发布失败，正在恢复应用指针、配置、systemd 单元和服务状态。" >&2
@@ -395,6 +459,15 @@ DATABASE_MIGRATION_ATTEMPTED=1
 /usr/sbin/runuser -u wkm-license -- "${RELEASE_VENV}/bin/python" \
   "${RELEASE_DIR}/register_user.py" init --db "${DATABASE_PATH}"
 
+# Exercise create_app, the final service.env, the installed private-key
+# permissions, the candidate public manifest and the migrated database as the
+# exact non-root service identity before switching current or touching systemd.
+/usr/sbin/runuser -u wkm-license -- /usr/bin/env \
+  PYTHONDONTWRITEBYTECODE=1 \
+  "${RELEASE_VENV}/bin/python" \
+  "${RELEASE_DIR}/scripts/service_preflight.py" \
+  --env "${ENV_PATH}" --manifest "${MANIFEST_PATH}"
+
 install -o root -g root -m 0644 \
   "${RELEASE_DIR}/deploy/el9/wechat-memory-license.service.example" \
   /etc/systemd/system/wechat-memory-license.service
@@ -416,15 +489,26 @@ mv -Tf "${CURRENT_LINK}.next" "${CURRENT_LINK}"
 systemctl daemon-reload
 wkm_deploy_checkpoint after_application_switch
 systemctl enable wechat-memory-license
+SERVICE_START_DIAGNOSTIC_SINCE="$(date --iso-8601=seconds)"
 if ! systemctl restart wechat-memory-license; then
   echo "授权服务启动失败。" >&2
+  emit_service_failure_diagnostics
   exit 4
 fi
 wkm_deploy_checkpoint after_service_restart
 systemctl enable --now wechat-memory-license-backup.timer
-if ! curl --fail --silent --show-error --connect-timeout 3 --max-time 15 \
-    http://127.0.0.1:9100/readyz/deep >/dev/null; then
+SERVICE_READY=0
+for _attempt in $(seq 1 30); do
+  if curl --fail --silent --show-error --connect-timeout 1 --max-time 2 \
+      http://127.0.0.1:9100/readyz/deep >/dev/null 2>&1; then
+    SERVICE_READY=1
+    break
+  fi
+  sleep 0.5
+done
+if (( ! SERVICE_READY )); then
   echo "候选版本的本机深度健康检查失败。" >&2
+  emit_service_failure_diagnostics
   exit 4
 fi
 

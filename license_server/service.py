@@ -16,7 +16,6 @@ from .signing import TicketSigner
 
 
 HEX64 = re.compile(r"^[a-f0-9]{64}$")
-CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 READ_ONLY = ("read_only",)
 
 
@@ -48,7 +47,7 @@ def normalize_username(value: Any) -> tuple[str, str]:
     if not isinstance(value, str):
         raise LicenseError("activation_failed", status=401)
     username = unicodedata.normalize("NFKC", value).strip()
-    if not 3 <= len(username) <= 64 or CONTROL.search(username) or any(
+    if not 3 <= len(username) <= 64 or not all(char.isprintable() for char in username) or any(
         char.isspace() for char in username
     ):
         raise LicenseError("activation_failed", status=401)
@@ -62,11 +61,26 @@ def require_text(payload: dict[str, Any], key: str, maximum: int) -> str:
     return value.strip()
 
 
+def optional_client_metadata(
+    payload: dict[str, Any], key: str, maximum: int
+) -> str:
+    value = payload.get(key, "")
+    if value is None:
+        return ""
+    if (
+        not isinstance(value, str)
+        or len(value) > maximum
+        or not all(char.isprintable() for char in value)
+    ):
+        raise LicenseError("invalid_request")
+    return value
+
+
 @dataclass(frozen=True)
 class LicenseSettings:
     issuer: str = "wechat-memory-license"
     audience: str = "wechat-memory-client"
-    refresh_days: int = 30
+    refresh_days: int = 365
     ticket_hours: int = 24
 
 
@@ -81,8 +95,8 @@ class LicenseManager:
         activation_code = require_text(payload, "activation_code", 160).upper()
         install_id = require_text(payload, "install_id", 128)
         device_hash = require_text(payload, "device_hash", 64).casefold()
-        platform = str(payload.get("platform", ""))[:80]
-        app_version = str(payload.get("app_version", ""))[:40]
+        platform = optional_client_metadata(payload, "platform", 80)
+        app_version = optional_client_metadata(payload, "app_version", 40)
         if not HEX64.fullmatch(device_hash) or not 32 <= len(install_id) <= 128:
             raise LicenseError("activation_failed", status=401)
         digest = token_hash("license", activation_code)
@@ -97,6 +111,7 @@ class LicenseManager:
                 JOIN entitlements e ON e.customer_id=c.id
                 JOIN activation_credentials a ON a.entitlement_id=e.id
                 WHERE c.username_norm=? AND a.secret_hash=?
+                  AND a.status='active' AND a.last_used_at IS NULL
                 ORDER BY e.created_at DESC LIMIT 1
                 """,
                 (account_norm, digest),
@@ -153,9 +168,22 @@ class LicenseManager:
             refresh_token = self._new_refresh_session(
                 connection, device_id, platform, app_version, now
             )
-            connection.execute(
-                "UPDATE activation_credentials SET last_used_at=? WHERE id=?",
-                (now_text, row["credential_id"]),
+            consumed = connection.execute(
+                "UPDATE activation_credentials "
+                "SET status='revoked',last_used_at=?,revoked_at=? "
+                "WHERE id=? AND status='active' AND last_used_at IS NULL",
+                (now_text, now_text, row["credential_id"]),
+            )
+            if consumed.rowcount != 1:
+                # BEGIN IMMEDIATE serializes competing activations.  The
+                # status predicate makes credential consumption an atomic
+                # compare-and-set; losing requests roll back every device and
+                # refresh-session write made in this transaction.
+                raise LicenseError("activation_failed", status=401)
+            self._audit(
+                connection, "client", device_id,
+                "activation_credential.consumed", "activation_credential",
+                row["credential_id"], {}, now_text,
             )
             self._audit(
                 connection, "client", device_id, "device.activated", "device", device_id,
@@ -178,8 +206,8 @@ class LicenseManager:
         refresh_token = require_text(payload, "refresh_token", 256)
         install_id = require_text(payload, "install_id", 128)
         device_hash = require_text(payload, "device_hash", 64).casefold()
-        platform = str(payload.get("platform", ""))[:80]
-        app_version = str(payload.get("app_version", ""))[:40]
+        platform = optional_client_metadata(payload, "platform", 80)
+        app_version = optional_client_metadata(payload, "app_version", 40)
         now = utc_now()
         now_text = iso(now)
         digest = token_hash("refresh", refresh_token)

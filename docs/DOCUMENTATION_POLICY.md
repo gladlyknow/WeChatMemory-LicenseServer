@@ -1,8 +1,8 @@
 # 跨仓库交付总览与文档治理规范
 
 > 基线日期：2026-10-30
-> 客户端：`WeChatMemory-Client 0.3.4`
-> 授权服务端：`WeChatMemory-LicenseServer 0.2.5`
+> 客户端：`WeChatMemory-Client 0.3.5`
+> 授权服务端：`WeChatMemory-LicenseServer 0.2.6`
 > 授权协议：`v1`；服务端 SQLite schema：`3`；公钥清单 schema：`1`
 
 本文是客户端与授权服务端协同发布的入口。它说明两个仓库的边界、部署顺序、版本与信任根检查，
@@ -43,7 +43,7 @@ flowchart LR
     end
 
     subgraph CLOUD["104.244.90.172：授权控制平面"]
-        NGINX["Nginx HTTPS :9000"] --> API["Waitress / Flask 127.0.0.1:9100"]
+        NGINX["Nginx HTTP :9000"] --> API["Waitress / Flask 127.0.0.1:9100"]
         API --> DB["本机 SQLite schema 3"]
         KEY["受限 Ed25519 私钥"] --> API
     end
@@ -61,7 +61,7 @@ flowchart LR
 
 ### 2.2 授权服务允许接收的数据
 
-- 授权用户名和一次性激活码；服务端仅持久化激活码摘要；
+- 授权用户名和一次性激活码；服务端仅持久化激活码摘要，首次成功激活后在同一事务中原子吊销；
 - 安装标识、匿名设备摘要、平台和客户端版本；
 - 刷新令牌、设备状态、套餐、能力、到期时间和审计事件。
 
@@ -143,16 +143,20 @@ sudo systemctl status wechat-memory-license --no-pager
 curl --fail --silent http://127.0.0.1:9100/healthz
 curl --fail --silent http://127.0.0.1:9100/readyz
 curl --fail --silent http://127.0.0.1:9100/readyz/deep
-curl --fail --silent https://104.244.90.172:9000/healthz
-curl --fail --silent https://104.244.90.172:9000/readyz
-curl --fail --silent https://104.244.90.172:9000/v1/keys
+curl --fail --silent http://104.244.90.172:9000/healthz
+curl --fail --silent http://104.244.90.172:9000/readyz
+curl --fail --silent http://104.244.90.172:9000/v1/keys
 ```
 
-不得使用 `curl -k` 掩盖证书问题。当前 `/readyz` 是受限流的廉价探针，只确认 SQLite 可用、
+默认 HTTP 无证书校验。当前 `/readyz` 是受限流的廉价探针，只确认 SQLite 可用、
 版本一致且满足版本化最低结构合同；完整 `PRAGMA quick_check` 仅由 loopback `/readyz/deep` 执行，Nginx 必须拒绝公网访问
 该深度探针。签名私钥与公开清单的匹配在应用启动时 fail closed。`/v1/keys` 的 `active_key_id`
 和指纹还必须与仓库公开清单一致，但该接口仍只是诊断信息。生产发布还要执行
 [验收标准](ACCEPTANCE_CRITERIA.md) 中的签名 canary，不能只依赖 ready 响应。
+
+HTTP 不提供链路保密性，WebSocket 也不能替代 TLS。一次性激活码原子消费、365 天 refresh token、
+每次轮换、设备绑定和 Ed25519 验签都只是限损/防伪造措施；365 天默认值用于覆盖 180 天离线套餐承诺，
+同时也扩大明文窃听风险窗口。这些措施不能阻止同链路观察者读取请求秘密。
 
 建立金丝雀用户并立即安全保存一次性激活码：
 
@@ -168,7 +172,7 @@ Windows 10/11 x64 上使用 x64 Python/PowerShell：
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File ".\packaging\windows\build.ps1" `
-  -Version "0.3.4" `
+  -Version "0.3.5" `
   -Edition NativeCandidate
 ```
 
@@ -178,7 +182,7 @@ helper 完整，不应通过降级为开发版规避预检。
 Ubuntu/Linux 构建：
 
 ```bash
-VERSION=0.3.4 ./packaging/linux/build.sh
+VERSION=0.3.5 ./packaging/linux/build.sh
 ```
 
 ### 3.5 跨端最终验收
@@ -192,16 +196,25 @@ VERSION=0.3.4 ./packaging/linux/build.sh
 
 | 层 | 当前基线 | 兼容要求 | 发布状态 |
 |---|---|---|---|
-| 客户端 | `0.3.4` | Windows 10/11 x64；Ubuntu/Linux x86_64 | Windows 为 NativeCandidate，须实机验收 |
+| 客户端 | `0.3.5` | Windows 10/11 x64；Ubuntu/Linux x86_64 | Windows 为 NativeCandidate，须实机验收 |
 | Windows 微信 | 4.x 读取框架 | 取钥门禁目前精确信任腾讯签名的 `Weixin.exe 4.1.0.34` 指定哈希 | 其他版本必须新增证据和门禁，不能默认放行 |
-| 授权服务端 | `0.2.5` | Enterprise Linux 9、Python 3.11、单主 SQLite | 手工部署 |
-| 公网接口 | `/v1/*` | HTTPS `104.244.90.172:9000`；内部 `127.0.0.1:9100` | 禁止 HTTP 降级 |
+| 授权服务端 | `0.2.6` | Enterprise Linux 9、Python 3.11、单主 SQLite | 手工部署 |
+| 公网接口 | `/v1/*` | HTTP `104.244.90.172:9000`；内部 `127.0.0.1:9100` | 明文风险已接受；未来 TLS 必须显式启用 |
 | 授权协议 | `v1` | `issuer=wechat-memory-license`、`audience=wechat-memory-client` | 未知 `key_id` 失败关闭 |
 | 服务端数据库 | schema `3` | 顺序 migration；终态 refresh session 有界清理；部署前后均需备份、廉价 `readyz` 和 loopback `readyz/deep` | SQLite WAL 单主 |
 | 公钥清单 | schema `1` | Ed25519、base64url raw no padding；当前 active key `2026-10-30` | 服务端清单与客户端镜像必须一致 |
 
 版本号相同不代表信任根相同。每个发布物必须同时记录客户端版本、服务端版本、协议版本、数据库 schema、
 公钥清单摘要和 active key-id。
+
+### 4.1 origin 兼容断点与发布顺序
+
+- Client `0.3.4` 及更旧版固定 HTTPS，不能向 Server `0.2.6` 的默认 HTTP origin 刷新；
+- Client `0.3.5` 精确只允许 `http://104.244.90.172:9000`，不兼容 Server `0.2.6` 的可选 TLS 入口；
+- 已有生产用户时，必须协调发布 Client `0.3.5` 和 Server `0.2.6`。切换窗口内，旧客户端只能依靠仍在
+  `offline_until` 内的已验签票据过渡；超出该窗口前必须完成升级。尚无生产用户时不构成部署阻断；
+- 未来切换 TLS 前，必须先发布内置匹配 HTTPS origin/信任策略的客户端，然后服务端才能显式传入
+  `--ack-client-https-origin-ready`。该参数是 fail-closed 部署门禁，不代表部署器能自动验证客户端覆盖率。
 
 ## 5. 签名密钥轮换顺序
 

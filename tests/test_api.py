@@ -5,7 +5,9 @@ import json
 import os
 import sqlite3
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -13,9 +15,14 @@ from unittest import mock
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from license_server.app import create_app
-from license_server.service import token_hash
+from license_server.service import LicenseError, token_hash
 from license_server.signing import TicketSigner
-from license_admin import set_device_status, set_entitlement_status, set_plan
+from license_admin import (
+    reset_activation_code,
+    set_device_status,
+    set_entitlement_status,
+    set_plan,
+)
 from register_user import initialize_database, register_user
 
 
@@ -49,6 +56,13 @@ class LicenseApiTests(unittest.TestCase):
         }
         value.update(extra)
         return value
+
+    def reset_code(self, *, keep_sessions: bool = False) -> str:
+        result = reset_activation_code(
+            self.database, "commercial-user", keep_sessions=keep_sessions
+        )
+        self.registered["activation_code"] = result["activation_code"]
+        return result["activation_code"]
 
     def test_health_ready_and_public_key(self) -> None:
         self.assertEqual(self.client.get("/healthz").status_code, 200)
@@ -232,6 +246,78 @@ class LicenseApiTests(unittest.TestCase):
         )
         self.assertEqual(replay.status_code, 401)
 
+    def test_activation_credential_is_consumed_once_and_audited(self) -> None:
+        first = self.client.post("/v1/activate", json=self.payload())
+        self.assertEqual(first.status_code, 200)
+
+        replay = self.client.post("/v1/activate", json=self.payload())
+        self.assertEqual(replay.status_code, 401)
+        self.assertEqual(replay.get_json(), {"error": "activation_failed"})
+
+        with sqlite3.connect(self.database) as connection:
+            credential = connection.execute(
+                "SELECT status,last_used_at,revoked_at FROM activation_credentials"
+            ).fetchone()
+            event_count = connection.execute(
+                "SELECT COUNT(*) FROM audit_events "
+                "WHERE event_type='activation_credential.consumed'"
+            ).fetchone()[0]
+        self.assertEqual(credential[0], "revoked")
+        self.assertIsNotNone(credential[1])
+        self.assertEqual(credential[1], credential[2])
+        self.assertEqual(event_count, 1)
+
+    def test_legacy_used_but_active_credential_fails_closed(self) -> None:
+        # Releases through 0.2.5 recorded last_used_at without changing
+        # status.  An upgraded server must not grant that historical code one
+        # additional successful replay before the new one-time CAS applies.
+        with sqlite3.connect(self.database) as connection:
+            connection.execute(
+                "UPDATE activation_credentials SET status='active',last_used_at=?",
+                ("2026-10-29T00:00:00Z",),
+            )
+
+        result = self.client.post("/v1/activate", json=self.payload())
+        self.assertEqual(result.status_code, 401)
+        self.assertEqual(result.get_json(), {"error": "activation_failed"})
+        with sqlite3.connect(self.database) as connection:
+            credential = connection.execute(
+                "SELECT status,last_used_at FROM activation_credentials"
+            ).fetchone()
+            devices = connection.execute("SELECT COUNT(*) FROM devices").fetchone()[0]
+            sessions = connection.execute(
+                "SELECT COUNT(*) FROM refresh_sessions"
+            ).fetchone()[0]
+        self.assertEqual(credential, ("active", "2026-10-29T00:00:00Z"))
+        self.assertEqual((devices, sessions), (0, 0))
+
+    def test_concurrent_activation_consumes_credential_atomically(self) -> None:
+        manager = self.app.extensions["license_manager"]
+        barrier = threading.Barrier(2)
+
+        def activate_once() -> str:
+            barrier.wait(timeout=5)
+            try:
+                manager.activate(self.payload())
+            except LicenseError as error:
+                return error.public_code
+            return "ok"
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(lambda _index: activate_once(), range(2)))
+        self.assertEqual(sorted(results), ["activation_failed", "ok"])
+
+        with sqlite3.connect(self.database) as connection:
+            devices = connection.execute("SELECT COUNT(*) FROM devices").fetchone()[0]
+            sessions = connection.execute(
+                "SELECT COUNT(*) FROM refresh_sessions WHERE status='active'"
+            ).fetchone()[0]
+            consumed_events = connection.execute(
+                "SELECT COUNT(*) FROM audit_events "
+                "WHERE event_type='activation_credential.consumed'"
+            ).fetchone()[0]
+        self.assertEqual((devices, sessions, consumed_events), (1, 1, 1))
+
     def test_activation_failure_does_not_reveal_username_existence(self) -> None:
         wrong_code = self.client.post(
             "/v1/activate", json=self.payload(activation_code="WKM1-WRONG-WRONG")
@@ -242,6 +328,53 @@ class LicenseApiTests(unittest.TestCase):
         self.assertEqual(wrong_code.status_code, 401)
         self.assertEqual(wrong_user.status_code, 401)
         self.assertEqual(wrong_code.get_json(), wrong_user.get_json())
+
+    def test_client_metadata_rejects_terminal_controls_and_non_strings(self) -> None:
+        hostile_values = (
+            ("platform", "windows\x1b]52;c;ZXZpbA==\x07"),
+            ("app_version", "0.3.5\nforged"),
+            ("platform", "windows\x9b31m"),
+            ("platform", "windows\u202eevil"),
+            ("app_version", {"unexpected": "mapping"}),
+        )
+        for key, value in hostile_values:
+            with self.subTest(stage="activate", key=key, value=value):
+                payload = self.payload()
+                payload[key] = value
+                response = self.client.post("/v1/activate", json=payload)
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.get_json(), {"error": "invalid_request"})
+
+        with sqlite3.connect(self.database) as connection:
+            credential = connection.execute(
+                "SELECT status,last_used_at FROM activation_credentials"
+            ).fetchone()
+            devices = connection.execute("SELECT COUNT(*) FROM devices").fetchone()[0]
+            sessions = connection.execute(
+                "SELECT COUNT(*) FROM refresh_sessions"
+            ).fetchone()[0]
+        self.assertEqual(credential, ("active", None))
+        self.assertEqual((devices, sessions), (0, 0))
+
+        activated = self.client.post("/v1/activate", json=self.payload()).get_json()
+        token = activated["refresh_token"]
+        for key, value in hostile_values:
+            with self.subTest(stage="refresh", key=key, value=value):
+                payload = {
+                    "refresh_token": token,
+                    "install_id": self.install_id,
+                    "device_hash": self.device_hash,
+                    key: value,
+                }
+                response = self.client.post("/v1/licenses/refresh", json=payload)
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.get_json(), {"error": "invalid_request"})
+
+        status = self.client.get(
+            "/v1/licenses/status",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(status.status_code, 200)
 
     def test_deactivate_revokes_refresh_session(self) -> None:
         body = self.client.post("/v1/activate", json=self.payload()).get_json()
@@ -277,9 +410,15 @@ class LicenseApiTests(unittest.TestCase):
             json={"refresh_token": first.get_json()["refresh_token"]},
         )
         self.assertEqual(deactivated.status_code, 200)
+        registered["activation_code"] = reset_activation_code(
+            self.database, "free-user"
+        )["activation_code"]
         second = self.client.post("/v1/activate", json=free_payload("b"))
         self.assertEqual(second.status_code, 200)
 
+        registered["activation_code"] = reset_activation_code(
+            self.database, "free-user"
+        )["activation_code"]
         blocked = self.client.post("/v1/activate", json=free_payload("a"))
         self.assertEqual(blocked.status_code, 409)
         self.assertEqual(blocked.get_json(), {"error": "device_limit_reached"})
@@ -300,6 +439,7 @@ class LicenseApiTests(unittest.TestCase):
             self.database, "commercial-user", device_id, "blocked"
         )
 
+        self.reset_code()
         blocked = self.client.post("/v1/activate", json=self.payload())
         self.assertEqual(blocked.status_code, 401)
         self.assertEqual(blocked.get_json(), {"error": "activation_failed"})
@@ -324,6 +464,7 @@ class LicenseApiTests(unittest.TestCase):
         )
         self.assertEqual(deactivated.status_code, 200)
 
+        self.reset_code()
         reactivated = self.client.post("/v1/activate", json=self.payload())
         self.assertEqual(reactivated.status_code, 200)
         self.assertEqual(
@@ -348,6 +489,7 @@ class LicenseApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 401)
 
+        self.reset_code()
         second = self.client.post("/v1/activate", json=self.payload()).get_json()
         with sqlite3.connect(self.database) as connection:
             connection.execute("UPDATE devices SET status='blocked'")

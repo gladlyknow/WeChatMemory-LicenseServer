@@ -50,6 +50,26 @@ DEVICE_STATUSES = ("active", "deactivated", "blocked")
 MAX_REFRESH_SESSION_RETENTION_DAYS = 3650
 
 
+def _terminal_safe(value: Any) -> str:
+    """Render untrusted database text without terminal control sequences."""
+
+    text = "" if value is None else str(value)
+    rendered: list[str] = []
+    for char in text:
+        codepoint = ord(char)
+        if char == "\\":
+            rendered.append("\\\\")
+        elif char == '"':
+            rendered.append('\\"')
+        elif char.isprintable():
+            rendered.append(char)
+        elif codepoint <= 0xFFFF:
+            rendered.append(f"\\u{codepoint:04x}")
+        else:
+            rendered.append(f"\\U{codepoint:08x}")
+    return "".join(rendered)
+
+
 def _actor() -> str:
     value = os.environ.get("WKM_ADMIN_ACTOR", "").strip()
     return value[:100] if value else getpass.getuser()[:100]
@@ -618,7 +638,7 @@ def reset_activation_code(
             "entitlement_id": entitlement["id"],
             "activation_code": activation_code,
             "sessions_revoked": not keep_sessions,
-            "activation_code_notice": "只显示一次；数据库不保存明文",
+            "activation_code_notice": "只显示一次；首次成功激活后立即失效；数据库不保存明文",
         }
     except Exception:
         con.rollback()
@@ -774,9 +794,9 @@ def parser() -> argparse.ArgumentParser:
 
 def _human(result: dict[str, Any]) -> None:
     if "activation_code" in result:
-        print(f"用户：{result['username']}")
-        print("激活码（只显示一次）：")
-        print(result["activation_code"])
+        print(f"用户：{_terminal_safe(result['username'])}")
+        print("激活码（只显示一次，首次成功激活后立即失效）：")
+        print(_terminal_safe(result["activation_code"]))
         if "sessions_revoked" in result:
             print("已撤销现有刷新会话：" + ("是" if result["sessions_revoked"] else "否"))
         return
@@ -784,13 +804,15 @@ def _human(result: dict[str, Any]) -> None:
         print("用户名\t用户状态\t授权状态\t套餐\t设备\t到期时间")
         for item in result["users"]:
             print(
-                f"{item['username']}\t{item['status']}\t{item['entitlement_status']}\t"
-                f"{item['plan_id']}\t{item['active_devices']}/{item['device_limit']}\t"
-                f"{item['expires_at'] or '永久'}"
+                f"{_terminal_safe(item['username'])}\t{_terminal_safe(item['status'])}\t"
+                f"{_terminal_safe(item['entitlement_status'])}\t"
+                f"{_terminal_safe(item['plan_id'])}\t"
+                f"{_terminal_safe(item['active_devices'])}/{_terminal_safe(item['device_limit'])}\t"
+                f"{_terminal_safe(item['expires_at'] or '永久')}"
             )
         return
     if "database" in result:
-        print(f"数据库已初始化：{result['database']}")
+        print(f"数据库已初始化：{_terminal_safe(result['database'])}")
         return
     if "deleted_rotated" in result:
         print(
@@ -801,28 +823,32 @@ def _human(result: dict[str, Any]) -> None:
         )
         return
     if "username" in result:
-        print(f"用户：{result['username']}")
+        print(f"用户：{_terminal_safe(result['username'])}")
         if "plan_id" in result:
-            print(f"套餐：{result['plan_id']}")
-            print(f"用户状态：{result['customer_status']}")
-            print(f"授权状态：{result['entitlement_status']}")
-            print(f"到期时间：{result['expires_at'] or '永久'}")
+            print(f"套餐：{_terminal_safe(result['plan_id'])}")
+            print(f"用户状态：{_terminal_safe(result['customer_status'])}")
+            print(f"授权状态：{_terminal_safe(result['entitlement_status'])}")
+            print(f"到期时间：{_terminal_safe(result['expires_at'] or '永久')}")
             print(
-                f"设备：{result['active_devices']}/{result['plan']['device_limit']}，"
-                f"离线宽限：{result['plan']['offline_grace_days']} 天"
+                f"设备：{_terminal_safe(result['active_devices'])}/"
+                f"{_terminal_safe(result['plan']['device_limit'])}，"
+                f"离线宽限：{_terminal_safe(result['plan']['offline_grace_days'])} 天"
             )
         else:
             print(
-                f"设备：{result['active_devices']}/{result['device_limit']}"
+                f"设备：{_terminal_safe(result['active_devices'])}/"
+                f"{_terminal_safe(result['device_limit'])}"
             )
         for device in result.get("devices", []):
             print(
-                f"- {device['device_id']}  {device['status']}  "
-                f"{device['platform']} {device['app_version']}  "
-                f"最后在线 {device['last_seen_at']}"
+                f"- {_terminal_safe(device['device_id'])}  "
+                f"{_terminal_safe(device['status'])}  "
+                f"{_terminal_safe(device['platform'])} "
+                f"{_terminal_safe(device['app_version'])}  "
+                f"最后在线 {_terminal_safe(device['last_seen_at'])}"
             )
         return
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(json.dumps(result, ensure_ascii=True, indent=2))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -880,12 +906,12 @@ def main(argv: list[str] | None = None) -> int:
                 max_batches=args.max_batches,
             )
         if args.json:
-            print(json.dumps(result, ensure_ascii=False, indent=2))
+            print(json.dumps(result, ensure_ascii=True, indent=2))
         else:
             _human(result)
         return 0
     except (RegistrationError, sqlite3.Error, OSError, ValueError) as exc:
-        print(f"错误：{exc}", file=sys.stderr)
+        print(f"错误：{_terminal_safe(exc)}", file=sys.stderr)
         return 2
 
 

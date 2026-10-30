@@ -8,7 +8,7 @@ SOURCE_DIR="/data/WeChatMemory-LicenseServer"
 SIGNING_KEY="/root/wkm-signing-ed25519.pem"
 KEY_ID="2026-10-30"
 EMAIL="gladlygrady@tutamail.com"
-TLS_MODE="letsencrypt"
+TLS_MODE="http"
 EXISTING_CERT=""
 EXISTING_KEY=""
 CERTBOT_VERSION="5.9.0"
@@ -16,6 +16,7 @@ CERTBOT_ROOT="/opt/wechat-memory-license-certbot"
 FIREWALL_ZONE=""
 RETIRE_NGINX_CONF=""
 ALLOW_UNBOUND_PUBLIC_IP=0
+ACK_CLIENT_HTTPS_ORIGIN_READY=0
 
 usage() {
   cat <<'EOF'
@@ -23,14 +24,14 @@ usage() {
 
 必要选项（首次部署）：
   --signing-key PATH       与客户端内置公钥配对的 Ed25519 私钥 PEM
-  --email ADDRESS          Let's Encrypt 通知邮箱，默认 gladlygrady@tutamail.com
 
 常用选项：
   --source PATH            当前服务端源码目录，默认 /data/WeChatMemory-LicenseServer
   --public-ip IP           公网 IPv4，默认 104.244.90.172
-  --public-port PORT       公网 HTTPS 端口，默认 9000
+  --public-port PORT       公网端口，默认 9000
   --key-id ID              Ed25519 key id，默认 2026-10-30
-  --tls-mode MODE          letsencrypt 或 existing
+  --tls-mode MODE          http（默认）、letsencrypt 或 existing
+  --email ADDRESS          letsencrypt 通知邮箱，默认 gladlygrady@tutamail.com
   --tls-cert PATH          existing 模式的完整证书链
   --tls-key PATH           existing 模式的 TLS 私钥
   --certbot-version VER    默认 5.9.0，最低必须为 5.4
@@ -39,8 +40,12 @@ usage() {
                            成功后字节备份保留在 /etc/wechat-memory-license/retired-nginx
   --allow-unbound-public-ip
                            仅限已人工验证的 1:1 NAT/EIP；跳过本机 IP 归属门禁
+  --ack-client-https-origin-ready
+                           TLS 专用危险确认：已先发布内置匹配 HTTPS
+                           origin/信任策略的客户端；当前 0.3.5 不兼容
 
-升级时服务器已经安装签名私钥和 TLS 证书，可省略 --signing-key 和 --email。
+默认 HTTP 部署不会安装、运行或依赖 Certbot。只有显式选择 letsencrypt 才会申请证书。
+升级时服务器已经安装签名私钥时，可省略 --signing-key。
 EOF
 }
 
@@ -59,6 +64,7 @@ while [[ $# -gt 0 ]]; do
     --firewall-zone) FIREWALL_ZONE="$2"; shift 2 ;;
     --retire-nginx-conf) RETIRE_NGINX_CONF="$2"; shift 2 ;;
     --allow-unbound-public-ip) ALLOW_UNBOUND_PUBLIC_IP=1; shift ;;
+    --ack-client-https-origin-ready) ACK_CLIENT_HTTPS_ORIGIN_READY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "未知参数：$1" >&2; usage >&2; exit 2 ;;
   esac
@@ -83,15 +89,22 @@ if [[ ! "${PUBLIC_PORT}" =~ ^[0-9]+$ ]] || (( PUBLIC_PORT < 1 || PUBLIC_PORT > 6
   echo "公网端口不合法。" >&2
   exit 2
 fi
-if [[ "${TLS_MODE}" != "letsencrypt" && "${TLS_MODE}" != "existing" ]]; then
-  echo "--tls-mode 只能是 letsencrypt 或 existing。" >&2
+if [[ "${TLS_MODE}" != "http" && "${TLS_MODE}" != "letsencrypt" && \
+      "${TLS_MODE}" != "existing" ]]; then
+  echo "--tls-mode 只能是 http、letsencrypt 或 existing。" >&2
+  exit 2
+fi
+if [[ "${TLS_MODE}" != "http" && "${ACK_CLIENT_HTTPS_ORIGIN_READY}" != "1" ]]; then
+  echo "TLS 模式与当前 Client 0.3.5 的固定 HTTP origin 不兼容。" >&2
+  echo "只有先发布匹配 HTTPS origin/信任策略的新客户端后，才可显式传入 --ack-client-https-origin-ready。" >&2
   exit 2
 fi
 if [[ ! "${KEY_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
   echo "--key-id 只能包含字母、数字、点、下划线和短横线。" >&2
   exit 2
 fi
-if [[ ! "${CERTBOT_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+if [[ "${TLS_MODE}" == "letsencrypt" && \
+      ! "${CERTBOT_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "--certbot-version 必须是 x.y.z 格式。" >&2
   exit 2
 fi
@@ -138,9 +151,15 @@ if [[ -n "${RETIRE_NGINX_CONF}" ]]; then
     "${RETIRE_NGINX_CONF}" "${BOOTSTRAP}" /etc/nginx/conf.d \
     "${PUBLIC_IP}" "${PUBLIC_PORT}")"
 fi
-if ! wkm_version_at_least "${CERTBOT_VERSION}" 5 4; then
+if [[ "${TLS_MODE}" == "letsencrypt" ]] && \
+   ! wkm_version_at_least "${CERTBOT_VERSION}" 5 4; then
   echo "--certbot-version 必须不低于 5.4.0。" >&2
   exit 2
+fi
+if [[ "${TLS_MODE}" == "http" ]]; then
+  PUBLIC_SCHEME="http"
+else
+  PUBLIC_SCHEME="https"
 fi
 if [[ ! -f /etc/os-release ]]; then
   echo "无法识别操作系统。" >&2
@@ -192,7 +211,9 @@ if [[ ! -f "${SOURCE_DIR}/scripts/check_documentation.py" ]]; then
 fi
 python3.11 "${SOURCE_DIR}/scripts/check_documentation.py"
 
-install -d -o nginx -g nginx -m 0755 /var/www/wechat-memory-license-acme
+if [[ "${TLS_MODE}" == "letsencrypt" ]]; then
+  install -d -o nginx -g nginx -m 0755 /var/www/wechat-memory-license-acme
+fi
 install -d -o root -g root -m 0755 /etc/wechat-memory-license
 
 NGINX_FOREIGN_PRE_RETIRE_BASELINE=""
@@ -291,13 +312,18 @@ resolve_firewall_zone() {
 
 configure_firewall() {
   resolve_firewall_zone
-  if ! firewall-cmd --zone="${FIREWALL_ZONE}" --query-service=http >/dev/null; then
-    firewall-cmd --zone="${FIREWALL_ZONE}" --add-service=http >/dev/null
-    FIREWALL_RUNTIME_HTTP_ADDED=1
-  fi
-  if ! firewall-cmd --permanent --zone="${FIREWALL_ZONE}" --query-service=http >/dev/null; then
-    firewall-cmd --permanent --zone="${FIREWALL_ZONE}" --add-service=http >/dev/null
-    FIREWALL_PERMANENT_HTTP_ADDED=1
+  # Port 80 is only needed by the explicitly selected ACME HTTP-01 flow.
+  # The default HTTP API is served directly on PUBLIC_PORT and must not widen
+  # the shared host's firewall policy unnecessarily.
+  if [[ "${TLS_MODE}" == "letsencrypt" ]]; then
+    if ! firewall-cmd --zone="${FIREWALL_ZONE}" --query-service=http >/dev/null; then
+      firewall-cmd --zone="${FIREWALL_ZONE}" --add-service=http >/dev/null
+      FIREWALL_RUNTIME_HTTP_ADDED=1
+    fi
+    if ! firewall-cmd --permanent --zone="${FIREWALL_ZONE}" --query-service=http >/dev/null; then
+      firewall-cmd --permanent --zone="${FIREWALL_ZONE}" --add-service=http >/dev/null
+      FIREWALL_PERMANENT_HTTP_ADDED=1
+    fi
   fi
   if ! firewall-cmd --zone="${FIREWALL_ZONE}" \
       --query-port="${PUBLIC_PORT}/tcp" >/dev/null; then
@@ -443,6 +469,33 @@ restore_one_click_unit_state() {
   return "${failed}"
 }
 
+retire_certbot_runtime_if_unused() {
+  [[ "${TLS_MODE}" != "letsencrypt" ]] || return 0
+  local changed=0
+  if [[ -f /etc/systemd/system/wechat-memory-certbot-renew.timer ]] || \
+     [[ -f /etc/systemd/system/wechat-memory-certbot-renew.service ]] || \
+     [[ -f /usr/local/sbin/wkm-certbot-deploy ]]; then
+    APPLICATION_RUNTIME_CHANGED=1
+    changed=1
+  fi
+  # These names are owned by this project.  Never inspect, stop or remove a
+  # distribution/global Certbot timer used by another virtual host.
+  if systemctl is-active --quiet wechat-memory-certbot-renew.timer || \
+     systemctl is-enabled --quiet wechat-memory-certbot-renew.timer; then
+    APPLICATION_RUNTIME_CHANGED=1
+    changed=1
+    systemctl disable --now wechat-memory-certbot-renew.timer
+  fi
+  rm -f -- \
+    /etc/systemd/system/wechat-memory-certbot-renew.timer \
+    /etc/systemd/system/wechat-memory-certbot-renew.service \
+    /usr/local/sbin/wkm-certbot-deploy
+  if (( changed )); then
+    systemctl daemon-reload
+    echo "当前 ${TLS_MODE} 模式已停用本项目专属 Certbot timer；证书和专属 venv 保留供未来显式 TLS 迁移。"
+  fi
+}
+
 restore_application_runtime() {
   local failed=0
   if (( ! APPLICATION_TRANSACTION_ARMED || ! APPLICATION_RUNTIME_CHANGED )); then
@@ -526,6 +579,7 @@ on_deploy_exit() {
 }
 trap on_deploy_exit EXIT
 capture_application_runtime
+retire_certbot_runtime_if_unused
 
 # The operator may explicitly retire one stopped legacy virtual host that
 # claims this deployment's IP.  Capture both the pre-retirement foreign digest
@@ -544,7 +598,7 @@ if [[ -n "${RETIRE_NGINX_CONF}" ]]; then
   wkm_retire_nginx_conf "${APPLICATION_TRANSACTION_DIR}" \
     "${RETIRE_NGINX_CONF}" \
     /etc/wechat-memory-license/retired-nginx \
-    retired-nginx-conf "${PUBLIC_IP}" "${PUBLIC_PORT}"
+    retired-nginx-conf "${PUBLIC_IP}" "${PUBLIC_PORT}" "${PUBLIC_SCHEME}"
   echo "已将停用站点移出 active conf.d：${RETIRE_NGINX_CONF}"
   echo "可恢复备份：${WKM_RETIRED_NGINX_FILE}"
   wkm_deploy_checkpoint after_nginx_retirement
@@ -555,32 +609,33 @@ NGINX_FOREIGN_BASELINE="$(wkm_foreign_nginx_digest /etc/nginx "${BOOTSTRAP}")"
 
 configure_firewall
 configure_selinux
-ACME_ROUTE_VERIFIED=0
-
-if [[ -f "${BOOTSTRAP}" ]] && nginx -t >/dev/null 2>&1 && \
-   grep -Eq "server_name[[:space:]]+${PUBLIC_IP//./\\.}[[:space:]]*;" "${BOOTSTRAP}" && \
-   grep -Fq '/var/www/wechat-memory-license-acme' "${BOOTSTRAP}"; then
-  echo "已存在与当前公网 IP 一致的 Nginx 配置，升级期间保持当前 9000 入口。"
-  if systemctl is-active --quiet nginx && verify_local_acme_route; then
-    ACME_ROUTE_VERIFIED=1
-    echo "当前 Nginx 运行态已提供专属 ACME 路由，不执行无需的共享服务 reload。"
+if [[ "${TLS_MODE}" == "letsencrypt" ]]; then
+  ACME_ROUTE_VERIFIED=0
+  if [[ -f "${BOOTSTRAP}" ]] && nginx -t >/dev/null 2>&1 && \
+     grep -Eq "server_name[[:space:]]+${PUBLIC_IP//./\\.}[[:space:]]*;" "${BOOTSTRAP}" && \
+     grep -Fq '/var/www/wechat-memory-license-acme' "${BOOTSTRAP}"; then
+    echo "已存在与当前公网 IP 一致的 Nginx 配置，升级期间保持当前 9000 入口。"
+    if systemctl is-active --quiet nginx && verify_local_acme_route; then
+      ACME_ROUTE_VERIFIED=1
+      echo "当前 Nginx 运行态已提供专属 ACME 路由，不执行无需的共享服务 reload。"
+    else
+      activate_nginx_configuration
+    fi
   else
+    if [[ -f "${BOOTSTRAP}" ]]; then
+      echo "将已确认归属 WeChatMemory 的旧公网 IP 配置迁移到 ${PUBLIC_IP}。"
+    fi
+    backup_nginx_config
+    sed "s/104\.244\.90\.172/${PUBLIC_IP}/g" \
+      "${SOURCE_DIR}/deploy/el9/nginx-bootstrap.conf" >"${BOOTSTRAP}.tmp"
+    NGINX_CONFIG_CHANGED=1
+    install -o root -g root -m 0644 "${BOOTSTRAP}.tmp" "${BOOTSTRAP}"
+    rm -f -- "${BOOTSTRAP}.tmp"
     activate_nginx_configuration
   fi
-else
-  if [[ -f "${BOOTSTRAP}" ]]; then
-    echo "将已确认归属 WeChatMemory 的旧公网 IP 配置迁移到 ${PUBLIC_IP}。"
+  if (( ! ACME_ROUTE_VERIFIED )); then
+    verify_local_acme_route
   fi
-  backup_nginx_config
-  sed "s/104\.244\.90\.172/${PUBLIC_IP}/g" \
-    "${SOURCE_DIR}/deploy/el9/nginx-bootstrap.conf" >"${BOOTSTRAP}.tmp"
-  NGINX_CONFIG_CHANGED=1
-  install -o root -g root -m 0644 "${BOOTSTRAP}.tmp" "${BOOTSTRAP}"
-  rm -f -- "${BOOTSTRAP}.tmp"
-  activate_nginx_configuration
-fi
-if (( ! ACME_ROUTE_VERIFIED )); then
-  verify_local_acme_route
 fi
 
 TLS_CERT=""
@@ -621,7 +676,7 @@ if [[ "${TLS_MODE}" == "letsencrypt" ]]; then
   install -o root -g root -m 0644 \
     "${SOURCE_DIR}/deploy/el9/wechat-memory-certbot-renew.timer" \
     /etc/systemd/system/wechat-memory-certbot-renew.timer
-else
+elif [[ "${TLS_MODE}" == "existing" ]]; then
   if [[ ! -f "${EXISTING_CERT}" || ! -f "${EXISTING_KEY}" ]]; then
     echo "existing 模式必须提供 --tls-cert 和 --tls-key。" >&2
     exit 3
@@ -639,14 +694,16 @@ else
   TLS_KEY=/etc/nginx/wechat-memory-license-tls/privkey.pem
 fi
 
-openssl x509 -in "${TLS_CERT}" -noout -checkend 172800 >/dev/null || {
-  echo "TLS 证书将在 48 小时内过期，拒绝上线。" >&2
-  exit 4
-}
-openssl x509 -in "${TLS_CERT}" -noout -text | grep -F "IP Address:${PUBLIC_IP}" >/dev/null || {
-  echo "TLS 证书不包含目标 IP SAN。" >&2
-  exit 4
-}
+if [[ "${TLS_MODE}" != "http" ]]; then
+  openssl x509 -in "${TLS_CERT}" -noout -checkend 172800 >/dev/null || {
+    echo "TLS 证书将在 48 小时内过期，拒绝上线。" >&2
+    exit 4
+  }
+  openssl x509 -in "${TLS_CERT}" -noout -text | grep -F "IP Address:${PUBLIC_IP}" >/dev/null || {
+    echo "TLS 证书不包含目标 IP SAN。" >&2
+    exit 4
+  }
+fi
 
 APPLICATION_RUNTIME_CHANGED=1
 APPLICATION_INSTALL_ATTEMPTED=1
@@ -657,13 +714,26 @@ wkm_deploy_checkpoint after_application_install
 
 PRODUCTION_TMP=/etc/nginx/conf.d/.wechat-memory-license.production.tmp
 backup_nginx_config
-sed -e "s#ssl_certificate     /etc/letsencrypt/live/104.244.90.172/fullchain.pem;#ssl_certificate     ${TLS_CERT};#" \
-    -e "s#ssl_certificate_key /etc/letsencrypt/live/104.244.90.172/privkey.pem;#ssl_certificate_key ${TLS_KEY};#" \
-    -e "s/104\.244\.90\.172/${PUBLIC_IP}/g" \
-    -e "s/listen 9000 ssl;/listen ${PUBLIC_PORT} ssl;/g" \
-    -e "s/listen \[::\]:9000 ssl;/listen [::]:${PUBLIC_PORT} ssl;/g" \
-    -e "s/X-Forwarded-Port 9000;/X-Forwarded-Port ${PUBLIC_PORT};/g" \
-    "${SOURCE_DIR}/deploy/el9/nginx-production.conf" >"${PRODUCTION_TMP}"
+if [[ "${TLS_MODE}" == "http" ]]; then
+  sed -e "s/104\.244\.90\.172/${PUBLIC_IP}/g" \
+      -e "s/listen 9000;/listen ${PUBLIC_PORT};/g" \
+      -e "s/listen \[::\]:9000;/listen [::]:${PUBLIC_PORT};/g" \
+      -e "s/X-Forwarded-Port 9000;/X-Forwarded-Port ${PUBLIC_PORT};/g" \
+      "${SOURCE_DIR}/deploy/el9/nginx-production.conf" >"${PRODUCTION_TMP}"
+else
+  if [[ "${TLS_MODE}" == "letsencrypt" ]]; then
+    TLS_NGINX_TEMPLATE="${SOURCE_DIR}/deploy/el9/nginx-production-tls.conf"
+  else
+    TLS_NGINX_TEMPLATE="${SOURCE_DIR}/deploy/el9/nginx-production-existing-tls.conf"
+  fi
+  sed -e "s#ssl_certificate     /etc/letsencrypt/live/104.244.90.172/fullchain.pem;#ssl_certificate     ${TLS_CERT};#" \
+      -e "s#ssl_certificate_key /etc/letsencrypt/live/104.244.90.172/privkey.pem;#ssl_certificate_key ${TLS_KEY};#" \
+      -e "s/104\.244\.90\.172/${PUBLIC_IP}/g" \
+      -e "s/listen 9000 ssl;/listen ${PUBLIC_PORT} ssl;/g" \
+      -e "s/listen \[::\]:9000 ssl;/listen [::]:${PUBLIC_PORT} ssl;/g" \
+      -e "s/X-Forwarded-Port 9000;/X-Forwarded-Port ${PUBLIC_PORT};/g" \
+      "${TLS_NGINX_TEMPLATE}" >"${PRODUCTION_TMP}"
+fi
 NGINX_CONFIG_CHANGED=1
 install -o root -g root -m 0644 "${PRODUCTION_TMP}" "${BOOTSTRAP}"
 rm -f -- "${PRODUCTION_TMP}"
@@ -677,13 +747,13 @@ fi
 curl --fail --silent --show-error --connect-timeout 3 --max-time 15 \
   http://127.0.0.1:9100/readyz/deep >/dev/null
 curl --fail --silent --show-error --connect-timeout 5 --max-time 20 \
-  "https://${PUBLIC_IP}:${PUBLIC_PORT}/readyz" >/dev/null
+  "${PUBLIC_SCHEME}://${PUBLIC_IP}:${PUBLIC_PORT}/readyz" >/dev/null
 PUBLIC_KEY_JSON="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 20 \
-  "https://${PUBLIC_IP}:${PUBLIC_PORT}/v1/keys")"
+  "${PUBLIC_SCHEME}://${PUBLIC_IP}:${PUBLIC_PORT}/v1/keys")"
 
 if (( RETIRED_NGINX_CONFIG_CHANGED )); then
   wkm_finalize_retired_nginx_conf \
-    "${RETIRE_NGINX_CONF}" "${PUBLIC_IP}" "${PUBLIC_PORT}"
+    "${RETIRE_NGINX_CONF}" "${PUBLIC_IP}" "${PUBLIC_PORT}" "${PUBLIC_SCHEME}"
 fi
 DEPLOY_COMPLETED=1
 trap - EXIT ERR
@@ -692,7 +762,7 @@ if [[ -n "${APPLICATION_TRANSACTION_DIR}" ]]; then
 fi
 
 echo
-echo "部署完成：https://${PUBLIC_IP}:${PUBLIC_PORT}"
+echo "部署完成：${PUBLIC_SCHEME}://${PUBLIC_IP}:${PUBLIC_PORT}"
 echo "授权服务：$(systemctl is-active wechat-memory-license)"
 echo "数据库备份定时器：$(systemctl is-enabled wechat-memory-license-backup.timer)"
 if [[ "${TLS_MODE}" == "letsencrypt" ]]; then

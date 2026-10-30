@@ -86,6 +86,10 @@ class DeploymentTransactionTests(unittest.TestCase):
             "ExecStart=/opt/wechat-memory-license/current/.venv/bin/python",
             service,
         )
+        self.assertIn("ExecStartPre=/opt/wechat-memory-license/current/.venv/bin/python", service)
+        self.assertIn("/current/scripts/service_preflight.py", service)
+        self.assertIn("--manifest /opt/wechat-memory-license/current/config/signing-public-keys.json", service)
+        self.assertIn("Environment=PYTHONDONTWRITEBYTECODE=1", service)
         self.assertIn(
             "PYTHON=/opt/wechat-memory-license/current/.venv/bin/python", admin
         )
@@ -247,6 +251,19 @@ class DeploymentTransactionTests(unittest.TestCase):
             self.assertNotIn(unused, installer)
             self.assertNotIn(unused, example)
         self.assertIn("--host 127.0.0.1 --port 9100", service)
+        self.assertIn("Type=exec", service)
+        self.assertIn(
+            "AssertPathExists=/opt/wechat-memory-license/current/license_server/__main__.py",
+            service,
+        )
+        self.assertNotIn("ConditionPathExists=", service)
+        self.assertIn(
+            "scripts/service_preflight.py --env /etc/wechat-memory-license/service.env",
+            service,
+        )
+        self.assertNotIn("ExecStartPre=/opt/wechat-memory-license/current/.venv/bin/python -c", service)
+        self.assertIn("REFRESH_TOKEN_DAYS=365", example)
+        self.assertIn("REFRESH_TOKEN_DAYS=$(env_value REFRESH_TOKEN_DAYS 365)", installer)
 
     def test_release_failure_contract_arms_rollback_before_runtime_mutation(self) -> None:
         installer = (ROOT / "deploy/el9/install-release.sh").read_text(
@@ -270,6 +287,9 @@ class DeploymentTransactionTests(unittest.TestCase):
             "bash deploy/el9/test-deployment-transaction.sh"
         )
         migration = installer.index("DATABASE_MIGRATION_ATTEMPTED=1")
+        service_preflight = installer.index(
+            '"${RELEASE_DIR}/scripts/service_preflight.py"'
+        )
         switch = installer.index(
             'mv -Tf "${CURRENT_LINK}.next" "${CURRENT_LINK}"'
         )
@@ -288,6 +308,8 @@ class DeploymentTransactionTests(unittest.TestCase):
         self.assertLess(transaction_gate, environment_install)
         self.assertLess(sbom_gate, environment_install)
         self.assertLess(environment_install, migration)
+        self.assertLess(migration, service_preflight)
+        self.assertLess(service_preflight, switch)
         self.assertLess(migration, switch)
         self.assertLess(switch, local_acceptance)
         self.assertLess(local_acceptance, commit)
@@ -295,6 +317,22 @@ class DeploymentTransactionTests(unittest.TestCase):
         self.assertIn("wkm_tx_restore_link", installer)
         self.assertIn("wkm_tx_restore_file", installer)
         self.assertIn("不会在服务可能产生新写入后自动降级数据库", installer)
+        self.assertIn("emit_service_failure_diagnostics", installer)
+        self.assertIn("journalctl -u wechat-memory-license", installer)
+        self.assertIn("redact_service_diagnostics", installer)
+        self.assertIn("[REDACTED-PRIVATE-KEY-BLOCK]", installer)
+        self.assertIn("[REDACTED-SENSITIVE-LINE]", installer)
+        self.assertIn("systemctl show wechat-memory-license", installer)
+        self.assertIn("-p ActiveState -p SubState -p Result", installer)
+        self.assertIn("-p ConditionResult -p AssertResult", installer)
+        self.assertIn("diagnose_path_metadata signing_key", installer)
+        self.assertIn("--since \"${SERVICE_START_DIAGNOSTIC_SINCE:--5 minutes}\"", installer)
+        self.assertIn("for _attempt in $(seq 1 30)", installer)
+        self.assertIn("sleep 0.5", installer)
+        self.assertLess(
+            installer.index("systemctl restart wechat-memory-license"),
+            installer.index("for _attempt in $(seq 1 30)"),
+        )
 
     def test_one_click_failure_contract_spans_application_and_nginx(self) -> None:
         script = (ROOT / "deploy/el9/one-click-deploy.sh").read_text(
@@ -319,7 +357,7 @@ class DeploymentTransactionTests(unittest.TestCase):
         )
         nginx_checkpoint = script.index("wkm_deploy_checkpoint after_nginx_switch")
         public_acceptance = script.index(
-            '"https://${PUBLIC_IP}:${PUBLIC_PORT}/readyz"'
+            '"${PUBLIC_SCHEME}://${PUBLIC_IP}:${PUBLIC_PORT}/readyz"'
         )
         commit = script.index("DEPLOY_COMPLETED=1")
 
@@ -345,6 +383,105 @@ class DeploymentTransactionTests(unittest.TestCase):
         self.assertIn("SQLite init/migration", script)
         self.assertIn(".one-click-transaction.*", script)
         self.assertIn(".install-transaction.*", script)
+
+    def test_default_public_entry_is_http_without_certbot_dependency(self) -> None:
+        script = (ROOT / "deploy/el9/one-click-deploy.sh").read_text(
+            encoding="utf-8"
+        )
+        wrapper = (ROOT / "deploy/el9/deploy-from-data.sh").read_text(
+            encoding="utf-8"
+        )
+        http_nginx = (ROOT / "deploy/el9/nginx-production.conf").read_text(
+            encoding="utf-8"
+        )
+        tls_nginx = (
+            ROOT / "deploy/el9/nginx-production-tls.conf"
+        ).read_text(encoding="utf-8")
+        existing_tls_nginx = (
+            ROOT / "deploy/el9/nginx-production-existing-tls.conf"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('TLS_MODE="http"', script)
+        self.assertIn('TLS_MODE="http"', wrapper)
+        self.assertIn('ACK_CLIENT_HTTPS_ORIGIN_READY=0', script)
+        self.assertIn('ACK_CLIENT_HTTPS_ORIGIN_READY=0', wrapper)
+        self.assertIn('--ack-client-https-origin-ready)', script)
+        self.assertIn('--ack-client-https-origin-ready)', wrapper)
+        self.assertIn('--tls-mode "${TLS_MODE}"', wrapper)
+        self.assertIn('PUBLIC_SCHEME="http"', script)
+        self.assertIn('"${PUBLIC_SCHEME}://${PUBLIC_IP}:${PUBLIC_PORT}/readyz"', script)
+        self.assertIn('"${PUBLIC_SCHEME}://${PUBLIC_IP}:${PUBLIC_PORT}/v1/keys"', script)
+        self.assertIn('[[ "${TLS_MODE}" == "letsencrypt" ]]', script)
+        self.assertIn('elif [[ "${TLS_MODE}" == "existing" ]]', script)
+        compatibility_gate = (
+            '[[ "${TLS_MODE}" != "http" && '
+            '"${ACK_CLIENT_HTTPS_ORIGIN_READY}" != "1" ]]'
+        )
+        self.assertIn(compatibility_gate, script)
+        self.assertIn(compatibility_gate, wrapper)
+        self.assertLess(script.index(compatibility_gate), script.index("dnf install -y"))
+        self.assertLess(wrapper.index(compatibility_gate), wrapper.index("git -C"))
+        self.assertIn('arguments+=(--ack-client-https-origin-ready)', wrapper)
+
+        self.assertIn("listen 9000;", http_nginx)
+        self.assertNotIn("listen 9000 ssl", http_nginx)
+        self.assertNotIn("ssl_certificate", http_nginx)
+        self.assertIn("proxy_pass http://127.0.0.1:9100;", http_nginx)
+        self.assertIn("X-Forwarded-Proto http", http_nginx)
+        self.assertIn("listen 9000 ssl;", tls_nginx)
+        self.assertIn("ssl_certificate", tls_nginx)
+        self.assertIn("listen 80;", tls_nginx)
+        self.assertIn("listen 9000 ssl;", existing_tls_nginx)
+        self.assertNotIn("listen 80;", existing_tls_nginx)
+        self.assertNotIn("acme-challenge", existing_tls_nginx)
+        self.assertIn("nginx-production-existing-tls.conf", script)
+
+        # The default branch never creates the ACME webroot or executes the
+        # Certbot environment.  Those operations are all inside the explicit
+        # letsencrypt branch.
+        letsencrypt_branch = script.index('if [[ "${TLS_MODE}" == "letsencrypt" ]]; then')
+        certbot_call = script.index('"${CERTBOT_ROOT}/bin/certbot" certonly')
+        self.assertLess(letsencrypt_branch, certbot_call)
+        self.assertIn("retire_certbot_runtime_if_unused", script)
+        self.assertNotIn("/opt/certbot", script)
+
+    def test_tls_origin_ack_gate_is_fail_closed_before_host_mutation(self) -> None:
+        wrapper = (ROOT / "deploy/el9/deploy-from-data.sh").read_text(
+            encoding="utf-8"
+        )
+        prefix, separator, _remainder = wrapper.partition(
+            'if [[ ${EUID} -ne 0 ]]; then'
+        )
+        self.assertTrue(separator)
+        option_probe = (
+            prefix
+            + '\nprintf "accepted:%s:%s\\n" "${TLS_MODE}" '
+            + '"${ACK_CLIENT_HTTPS_ORIGIN_READY}"\n'
+        )
+
+        def probe(*arguments: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                ["bash", "-s", "--", *arguments],
+                input=option_probe,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        http = probe("--tls-mode", "http")
+        self.assertEqual(http.returncode, 0, http.stderr)
+        self.assertIn("accepted:http:0", http.stdout)
+
+        tls_without_ack = probe("--tls-mode", "existing")
+        self.assertEqual(tls_without_ack.returncode, 2)
+        self.assertNotIn("accepted:", tls_without_ack.stdout)
+        self.assertIn("--ack-client-https-origin-ready", tls_without_ack.stderr)
+
+        tls_with_ack = probe(
+            "--tls-mode", "existing", "--ack-client-https-origin-ready"
+        )
+        self.assertEqual(tls_with_ack.returncode, 0, tls_with_ack.stderr)
+        self.assertIn("accepted:existing:1", tls_with_ack.stdout)
 
     def test_existing_tls_is_snapshotted_before_mutation_and_restored(self) -> None:
         script = (ROOT / "deploy/el9/one-click-deploy.sh").read_text(
@@ -377,7 +514,7 @@ class DeploymentTransactionTests(unittest.TestCase):
         self.assertLess(capture_call, compensation_armed)
         self.assertLess(compensation_armed, certificate_install)
 
-    def test_certbot_version_has_format_and_numeric_minimum_gates(self) -> None:
+    def test_optional_certbot_version_has_format_and_numeric_minimum_gates(self) -> None:
         script = (ROOT / "deploy/el9/one-click-deploy.sh").read_text(
             encoding="utf-8"
         )
@@ -457,6 +594,11 @@ class DeploymentTransactionTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("本机成功、外部仍是 `connection refused`", manual)
+        self.assertIn("deploy/el9/nginx-production-tls.conf", manual)
+        self.assertNotIn(
+            "install -o root -g root -m 0644 deploy/el9/nginx-production.conf",
+            manual,
+        )
         self.assertIn("外部探针未成功时禁止运行正式 Certbot", one_click)
 
     def test_explicit_nginx_retirement_is_transactional_and_one_time(self) -> None:

@@ -1,7 +1,7 @@
 # WeChatMemory 授权服务统一运维手册
 
 > 适用：Enterprise Linux 9，源码 `/data/WeChatMemory-LicenseServer`，
-> 公网 `https://104.244.90.172:9000`，邮箱 `gladlygrady@tutamail.com`。
+> 公网 `http://104.244.90.172:9000`，邮箱 `gladlygrady@tutamail.com`。
 > 本文是值班人员的统一入口；密钥轮换等高风险操作会链接到专题手册。
 
 ## 1. 系统做什么
@@ -12,7 +12,7 @@ Ed25519 签名票据。它不存储微信聊天正文、图片、语音、视频
 
 ```mermaid
 flowchart LR
-    C["Windows / Ubuntu 客户端"] -->|"HTTPS 9000"| N["Nginx：TLS 与反向代理"]
+    C["Windows / Ubuntu 客户端"] -->|"HTTP 9000"| N["Nginx：反向代理与限流"]
     N -->|"127.0.0.1:9100"| A["Waitress + Flask API"]
     A --> D["SQLite3 WAL"]
     A --> K["Ed25519 签名私钥"]
@@ -23,6 +23,11 @@ flowchart LR
 
 当前没有公网管理 Web，也没有 `/admin` 路由。用户和设备管理只能通过 SSH 后的
 `sudo wkm-license-admin` 完成。
+
+当前 HTTP 是明确接受的传输风险：Ed25519 防票据伪造，但不防链路窃听。一次性激活码在首次成功
+激活的同一事务内立即吊销，refresh token 默认 365 天且每次刷新轮换并绑定设备。长寿命是为了覆盖
+永久个人版 180 天离线承诺，也会扩大明文链路窃听后的风险窗口；这些措施只能限损，
+不能提供保密性。尽量用云安全组限制 9000 来源；WebSocket 也不是加密替代品。
 
 ## 2. 运行目录与服务
 
@@ -38,15 +43,15 @@ flowchart LR
 | `/var/lib/wechat-memory-license/backups` | 每日一致备份 | 默认保留 30 天 |
 | `wechat-memory-license.service` | 授权 API | 非 root 运行 |
 | `wechat-memory-license-backup.timer` | 数据库备份及终态 refresh session 有界清理 | UTC 03:15，随机延迟 20 分钟；先备份后清理 |
-| `wechat-memory-certbot-renew.timer` | 只检查本项目 IP 短证书 | 每 4 小时 |
+| `wechat-memory-certbot-renew.timer` | 仅可选 letsencrypt 模式安装 | 默认 HTTP 不存在/不启用 |
 
 ## 3. 首次部署
 
 ### 3.1 前置检查
 
-- 云安全组与 firewalld 允许 `80/tcp` 和 `9000/tcp`；
+- 云安全组与 firewalld 允许 `9000/tcp`；
 - `22/tcp` 限定管理来源；`9100/tcp` 不对公网开放；
-- `104.244.90.172` 指向本机，80 端口可用于 ACME HTTP-01；
+- `104.244.90.172` 指向本机；
 - 已安全准备与跟踪公钥清单匹配的 `/root/wkm-signing-ed25519.pem`；
 - 系统时间同步正常，磁盘不是 NFS/SMB。
 
@@ -79,6 +84,7 @@ sudo bash deploy/el9/deploy-from-data.sh \
 
 - `/data/WeChatMemory-LicenseServer`；
 - `104.244.90.172:9000`；
+- `tls-mode=http`；
 - `gladlygrady@tutamail.com`；
 - `key-id=2026-10-30`；
 - `origin/main` 的 fast-forward 更新。
@@ -92,19 +98,18 @@ sudo bash deploy/el9/deploy-from-data.sh \
 sudo systemctl is-active wechat-memory-license
 sudo systemctl is-active nginx
 sudo systemctl is-enabled wechat-memory-license-backup.timer
-sudo systemctl is-enabled wechat-memory-certbot-renew.timer
 
 curl --fail --silent --show-error http://127.0.0.1:9100/readyz/deep
-curl --fail --silent --show-error https://104.244.90.172:9000/readyz
-curl --fail --silent --show-error https://104.244.90.172:9000/v1/keys
+curl --fail --silent --show-error http://104.244.90.172:9000/readyz
+curl --fail --silent --show-error http://104.244.90.172:9000/v1/keys
 
 sudo -u wkm-license sqlite3 \
   /var/lib/wechat-memory-license/license.sqlite3 \
   'PRAGMA integrity_check; PRAGMA journal_mode; PRAGMA foreign_keys;'
-sudo ss -lntp | grep -E ':(80|9000|9100)\b'
+sudo ss -lntp | grep -E ':(9000|9100)\b'
 ```
 
-验收标准：数据库完整性为 `ok`，日志模式为 `wal`，9000 为 Nginx HTTPS，9100 只绑定
+验收标准：数据库完整性为 `ok`，日志模式为 `wal`，9000 为 Nginx HTTP，9100 只绑定
 `127.0.0.1`，`/v1/keys` 的 `active_key_id` 与客户端内置清单一致。
 
 ## 4. 日常升级和回滚
@@ -128,7 +133,8 @@ sudo bash deploy/el9/deploy-from-data.sh
 
 已有通过校验的 Nginx 生产配置时，升级过程不会先切换到 bootstrap。从写入候选 `service.env`
 到公网 `/readyz` 和 `/v1/keys` 验收完成前，统一补偿事务覆盖 `current`、`service.env`、systemd 单元/服务状态、
-Nginx 配置/服务状态以及相关 timer；existing TLS 模式还捕获覆盖前的证书和私钥。任一检查失败都恢复部署前快照。
+Nginx 配置/服务状态以及相关 timer；默认 HTTP 会事务化停用本项目专属 Certbot timer，失败时恢复；
+existing TLS 模式还捕获覆盖前的证书和私钥。任一检查失败都恢复部署前快照。
 首次从已停用 `entityecho.conf` 接管公网 IP 时，仅可显式传入
 `--retire-nginx-conf /etc/nginx/conf.d/entityecho.conf`。退役前会保存事务副本；成功后副本与记录位于
 `/etc/wechat-memory-license/retired-nginx/retirement.*/`；失败时按字节恢复。原路径若在部署期间被重建，
@@ -217,6 +223,9 @@ sudo wkm-license-admin reset-code --username alice
 ```
 
 新增或重置时的激活码只显示一次，不得进入 Shell 输出采集、CI、工单或普通文本文件。
+首次成功激活后该码立即失效；同码并发只有一个请求可以成功。重新激活必须执行 `reset-code`
+生成新码，管理员不得从数据库寻找或复用旧摘要。套餐允许多设备时，为第二台或第三台设备生成新码应使用
+`reset-code --keep-sessions`；不带该参数会撤销已激活设备的刷新会话，它们下次联网刷新将失效。
 降低设备上限且已有超额设备时，命令会拒绝；只有经确认才使用 `--deactivate-excess`。
 所有完整命令与状态语义见 [一键部署与用户授权](ONE_CLICK_DEPLOY_AND_ADMIN.md)。
 
@@ -332,24 +341,20 @@ curl --fail --silent --show-error http://127.0.0.1:9100/readyz/deep
 
 | 现象 | 首先检查 | 处置 | 风险/回滚 |
 |---|---|---|---|
-| 公网 9000 不通 | `systemctl status nginx`、云安全组、firewalld | 先查 Nginx 与证书，不要开放 9100 绕过 | 绕过 TLS 会泄露凭据 |
+| 公网 9000 不通 | `systemctl status nginx`、云安全组、firewalld | 先查 Nginx HTTP 监听，不要开放 9100 绕过 | 9100 绕过代理会失去可信来源头与入口控制 |
 | 本机 9100 不通 | `journalctl -u wechat-memory-license` | 检查 `service.env`、密钥/清单匹配、SQLite 权限 | 不要临时关闭验签 |
 | `/readyz` 503 | SQLite 路径、权限、schema 版本 | 先用 loopback `/readyz/deep` 与独立 `integrity_check` 定界，必要时停写恢复 | 不要直接删 WAL |
 | 部署拒绝工作树 | `git status --short` | 审核、提交或放弃本地变更 | 不用 `--skip-update` 绕过脏工作树检查 |
 | 私钥不匹配 manifest | `signing-key verify` | 停止部署，恢复正确私钥或使用新 key-id 轮换 | 不覆盖同 key-id |
-| 证书续期失败 | `wechat-memory-certbot-renew.timer` 与 journal | 确认 80 端口、ACME webroot、Certbot 版本 | 剩余 48 小时时必须告警 |
+| 可选 TLS 证书续期失败 | `wechat-memory-certbot-renew.timer` 与 journal | 仅 letsencrypt 模式确认 80、ACME webroot 和 Certbot | 默认 HTTP 不启用此 timer |
 | SQLite `locked/busy` 增多 | WAL 大小、磁盘、长事务 | 停止非必要管理写入，收集证据 | 不把 SQLite 放 NFS/SMB |
 | 用户无法激活 | `show`、`devices`、权益状态和设备上限 | 重置激活码或解绑确认的设备 | 不从数据库寻找明文激活码 |
 
-常用日志与证书检查：
+常用日志检查：
 
 ```bash
 sudo journalctl -u wechat-memory-license --since '30 minutes ago' --no-pager
-sudo journalctl -u wechat-memory-certbot-renew.service --since '24 hours ago' --no-pager
 sudo tail -n 100 /var/log/nginx/wechat-memory-license.error.log
-sudo openssl x509 \
-  -in /etc/letsencrypt/live/104.244.90.172/fullchain.pem \
-  -noout -issuer -subject -dates -ext subjectAltName
 ```
 
 日志不得记录 request body、Authorization、refresh token、激活码、完整设备摘要或私钥。
@@ -358,8 +363,7 @@ sudo openssl x509 \
 
 | 频率 | 检查 |
 |---|---|
-| 每 5 分钟 | 公网 `/healthz` 与 `/readyz`、HTTP 5xx/429 |
-| 每 4 小时 | Certbot timer 最近结果、证书剩余时间 |
+| 每 5 分钟 | 公网 HTTP `/healthz` 与 `/readyz`、HTTP 5xx/429 |
 | 每日 | 备份 timer、最新备份年龄与大小、refresh session 清理结果/积压、audit_events 增长、磁盘、SQLite WAL |
 | 每周 | 审计管理变更、失败激活异常、异地备份到达情况 |
 | 每月 | 在隔离环境执行 SQLite 恢复演练 |
@@ -371,7 +375,7 @@ sudo openssl x509 \
 - 已明确回滚是“仅代码”还是“代码 + 配置 + 数据库 + 密钥”；
 - 已验证备份完整性，而不只是看到文件存在；
 - 已保证私钥、激活码和 token 不会出现在命令输出采集中；
-- 变更后将同时验证本机 API、公网 HTTPS、SQLite 和一个专用验收账号。
+- 变更后将同时验证本机 API、公网 HTTP、SQLite 和一个专用验收账号。
 
 代码发布前还必须执行：
 

@@ -1,7 +1,7 @@
 # WeChatMemory 授权服务原理、接口与运维设计
 
-> 基线：License Server `0.2.5` / Client `0.3.4`
-> 公网入口：`https://104.244.90.172:9000`
+> 基线：License Server `0.2.6` / Client `0.3.5`
+> 公网入口：`http://104.244.90.172:9000`
 > 存储：单机 SQLite3，客户聊天数据不上云。
 > 文档导航见 [`README.md`](README.md)，生产操作见
 > [`SERVER_OPERATIONS_RUNBOOK.md`](SERVER_OPERATIONS_RUNBOOK.md)。
@@ -20,7 +20,7 @@
 
 ```mermaid
 flowchart LR
-    C["Windows / Ubuntu 客户端"] -->|"HTTPS :9000"| N["Nginx<br/>TLS、限流、安全头"]
+    C["Windows / Ubuntu 客户端"] -->|"HTTP :9000"| N["Nginx<br/>反向代理、限流、安全头"]
     N -->|"HTTP 127.0.0.1:9100"| A["Waitress + Flask 授权 API"]
     A --> D["SQLite3 WAL<br/>/var/lib/wechat-memory-license"]
     A --> K["Ed25519 私钥<br/>/etc/wechat-memory-license"]
@@ -79,7 +79,7 @@ erDiagram
 | `customers` | 云端账号 | 不要求真实邮箱/手机，大小写归一化后唯一 |
 | `plans` | 套餐模板 | 保存设备上限、离线天数、capability 模板 |
 | `entitlements` | 某个客户的实际权益 | 保存销售时套餐快照，后续修改套餐不改变已售权益 |
-| `activation_credentials` | 首次激活凭据 | 只保存命名空间 SHA-256 摘要和前缀，明文只显示一次 |
+| `activation_credentials` | 一次性激活凭据 | 只保存命名空间 SHA-256 摘要和前缀；明文只显示一次，首次成功激活后原子吊销 |
 | `devices` | 权益与匿名安装的绑定 | 只存随机 install ID 和匿名摘要，不存硬件原值 |
 | `refresh_sessions` | 设备刷新会话 | 只存 token 摘要；每次成功刷新都轮换；旧 `rotated/revoked` 默认保留 90 天后有界清理，`active` 永不清理 |
 | `audit_events` | 授权安全审计 | 记录事件类型和内部 ID，不记录激活码/token/聊天数据 |
@@ -105,7 +105,8 @@ sudo wkm-license-admin add \
   --username customer-demo --plan permanent_personal
 ```
 
-脚本只在当次标准输出显示一次激活码。不能从 SQLite 恢复明文；丢失后应吊销旧凭据并创建新码，
+脚本只在当次标准输出显示一次激活码。不能从 SQLite 恢复明文；首次成功激活后立即失效，丢失或
+需要再次激活时应通过 `wkm-license-admin reset-code` 吊销旧凭据并创建新码，
 不应把终端输出写入 CI 或工单日志。
 
 ### 5.2 首次激活
@@ -118,10 +119,21 @@ sequenceDiagram
     C->>A: POST /v1/activate
     A->>D: 校验 username_norm + activation hash
     A->>D: 校验权益状态和设备上限
+    A->>D: 同一 BEGIN IMMEDIATE 事务原子消费激活码
     A->>D: 绑定并回读 install_id + device_hash，吊销旧刷新会话
     A-->>C: 签名含设备绑定 claims 的 ticket + 新 refresh token
     C->>C: 验签和全部 claims，然后才解锁
 ```
+
+激活凭据的状态更新使用 `WHERE status='active'` 的 compare-and-set，并要求恰好更新一行。
+`BEGIN IMMEDIATE` 会串行化同一 SQLite 主库上的并发写入：只有一个请求能成功消费凭据，其他并发
+请求在取得写锁后看到 `revoked` 并返回统一的 `activation_failed` 401，且事务内已创建的设备或
+refresh session 会随异常一起回滚。消费事件写入 `activation_credential.consumed` 审计，绝不记录
+激活码或摘要。
+
+事务提交后、HTTP 响应到达前如果断网，客户端可能没有收到 ticket/refresh token，但激活码已永久消费；
+同码重试仍必须 401。这个边界不能用不安全的凭据重放放宽。运维核对设备后应通过
+`wkm-license-admin reset-code --keep-sessions` 生成新的一次性码。
 
 ### 5.3 打开界面时刷新
 
@@ -144,6 +156,10 @@ SQLite 写锁串行化。API 请求路径不运行维护查询。
 删除期限属于独立合规策略，必须另行审批，不能借会话清理悄悄移除证据。
 
 ## 6. HTTP API
+
+当前公网传输按产品决策使用明文 HTTP。WebSocket 不提供额外加密；Ed25519 签名、一次性激活码、
+refresh token 轮换和设备绑定只能防伪造/限制重放，不能防止链路窃听。云安全组应限制访问来源，
+未来可显式迁移到 Nginx TLS，不改变 API 或 SQLite 数据模型。
 
 | 方法 | 路径 | 用途 | 是否需要秘密 |
 |---|---|---|---|
@@ -184,7 +200,10 @@ Waitress 的监听地址固定在 systemd 单元的 `127.0.0.1:9100`，不由 `s
 覆盖。公网 IP、端口和 URL 由部署参数与 Nginx 配置管理；未接入运行时的配置项不写入环境文件。
 
 `LICENSE_TICKET_HOURS` 是在线票据时长，不是用户套餐有效期。服务端会把订阅票据截断在权益到期时间内。
-`REFRESH_TOKEN_DAYS` 是设备刷新凭据最长生命周期，到期后需重新输入激活码。
+`REFRESH_TOKEN_DAYS` 是设备刷新凭据最长生命周期，新部署默认 365 天；这保证
+`permanent_personal` 的 180 天离线窗口内恢复联网时仍可刷新，旧 `service.env` 的显式值升级时
+保持不变。长寿命 refresh token 在明文 HTTP 下会扩大窃听后的风险窗口；轮换和设备绑定只能限损，
+不能为 HTTP 链路提供保密性。如人工缩短该值，必须同时调整套餐离线承诺或接受凭据过期后需重新激活。
 `RATE_LIMIT_GLOBAL_PER_MINUTE` 是单进程全局上限，`RATE_LIMIT_MAX_KEYS` 约束活跃 IP 窗口表大小；
 多进程/多实例部署仍需共享限流后端或上游网关保护。
 
@@ -204,15 +223,16 @@ Waitress 的监听地址固定在 systemd 单元的 `127.0.0.1:9100`，不由 `s
    `current` 原子切换和 systemd 重启。
 4. 候选服务启动、本机 `/readyz/deep`、Nginx 切换或公网验收失败时，补偿事务恢复
    `current`、`service.env`、systemd 单元/服务状态、Nginx 配置/服务状态，以及 existing 模式
-   覆盖前的 TLS 证书与私钥。
+   覆盖前的 TLS 证书与私钥；从旧 TLS 切换到默认 HTTP 时，项目专属 Certbot timer 也在事务中
+   停用，失败则恢复原文件与启停状态。
 5. SQLite migration 不在服务可能发生新写入后自动降级；日志会指向升级前一致备份和人工恢复边界。
-6. 最后检查公网 HTTPS 证书、`/healthz`、`/v1/keys`、SQLite 以及专用验收用户。
+6. 最后检查公网 HTTP `/healthz`、`/v1/keys`、SQLite 以及专用验收用户。
 
 备份必须加密后异地保存，并定期真实恢复；单纯“备份文件存在”不是可恢复性证据。
 
 ## 9. 监控与报警
 
-- HTTPS 证书剩余 48 小时报警；IP 短期证书必须自动续期。
+- 默认 HTTP 无证书监控；显式启用 TLS 后才要求证书剩余 48 小时报警和自动续期。
 - 监控 `/healthz` 和 `/readyz`、请求 P95、HTTP 5xx/429、激活失败异常激增。
 - 监控磁盘、SQLite WAL 大小、checkpoint、busy/locked 比例和备份年龄。
 - 监控 `refresh_sessions` 各状态数量、每日清理条数和 `more_remaining`；持续积压时分次运行有界命令，不能取消上限。
@@ -232,5 +252,5 @@ Waitress 的监听地址固定在 systemd 单元的 `127.0.0.1:9100`，不由 `s
 ## 11. 当前交付状态
 
 - 已完成：SQLite schema v3、套餐快照、注册脚本、激活、设备上限、refresh token 轮换、吊销、终态会话有界保留清理、Ed25519 票据、限流、systemd/Nginx 部署素材和自动化测试。
-- 已完成：客户端 `0.3.4` 激活页、未激活锁定、内置公钥验签、公钥清单生成、后台刷新、到期只读和 capability gate。
+- 已完成：客户端 `0.3.5` 激活页、未激活锁定、内置公钥验签、公钥清单生成、后台刷新、到期只读和 capability gate。
 - 待完成：已具备 SSH 管理入口，需在 `104.244.90.172` 上执行 `/data/WeChatMemory-LicenseServer/deploy/el9/deploy-from-data.sh`，并完成激活、刷新、吊销、离线和备份恢复验收。

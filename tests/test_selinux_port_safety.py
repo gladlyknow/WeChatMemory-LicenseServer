@@ -21,6 +21,7 @@ class SelinuxPortSafetyTests(unittest.TestCase):
         listing: str,
         boolean_state: str = "on",
         list_exit: int = 0,
+        tls_mode: str = "http",
     ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -28,6 +29,8 @@ class SelinuxPortSafetyTests(unittest.TestCase):
             command_dir.mkdir()
             calls = root / "calls.log"
             calls.touch()
+            acme_webroot = root / "acme"
+            acme_webroot.mkdir()
             for name in (
                 "getenforce",
                 "semanage",
@@ -53,6 +56,7 @@ class SelinuxPortSafetyTests(unittest.TestCase):
                     "WKM_TEST_BOOLEAN_STATE": boolean_state,
                     "WKM_TEST_LIST_EXIT": str(list_exit),
                     "WKM_TEST_PUBLIC_PORT": "9000",
+                    "WKM_TEST_ACME_WEBROOT": str(acme_webroot),
                 }
             )
             result = subprocess.run(
@@ -62,6 +66,8 @@ class SelinuxPortSafetyTests(unittest.TestCase):
                     f"""
 set -Eeuo pipefail
 PUBLIC_PORT=9000
+TLS_MODE={tls_mode}
+ACME_WEBROOT="${{WKM_TEST_ACME_WEBROOT}}"
 SELINUX_PORT_ADDED=0
 SELINUX_BOOLEAN_CHANGED=0
 source {LIBRARY!s}
@@ -103,7 +109,6 @@ printf 'flags=%s,%s\\n' \
                 "getenforce",
                 "semanage port -l",
                 "getsebool httpd_can_network_connect",
-                "restorecon -RF /var/www/wechat-memory-license-acme",
             ],
         )
         self.assertNotIn("for (index =", LIBRARY.read_text(encoding="utf-8"))
@@ -137,9 +142,18 @@ printf 'flags=%s,%s\\n' \
                 "semanage port -a -t http_port_t -p tcp 9000",
                 "getsebool httpd_can_network_connect",
                 "setsebool -P httpd_can_network_connect 1",
-                "restorecon -RF /var/www/wechat-memory-license-acme",
             ],
         )
+
+    def test_letsencrypt_mode_labels_existing_acme_webroot_only(self) -> None:
+        result, calls = self._run(
+            mode="Enforcing",
+            listing="selinux_ports_http.txt",
+            tls_mode="letsencrypt",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(any(call.startswith("restorecon -RF ") for call in calls))
 
     def test_failed_table_read_fails_closed_without_any_write(self) -> None:
         result, calls = self._run(

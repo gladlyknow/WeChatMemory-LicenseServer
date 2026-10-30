@@ -162,7 +162,7 @@ class SharedHostSafetyTests(unittest.TestCase):
             self.assertIn("status=committed", record_text)
             self.assertIn(f"original_path={source}", record_text)
             self.assertIn(
-                "replacement_endpoint=https://104.244.90.172:9000", record_text
+                "replacement_endpoint=http://104.244.90.172:9000", record_text
             )
 
     def test_fault_after_retirement_restores_exact_bytes_and_mode(self) -> None:
@@ -317,7 +317,7 @@ class SharedHostSafetyTests(unittest.TestCase):
             result = run_bash('wkm_assert_owned_nginx_file "$1"', str(owned))
             self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_exact_ip_or_https_port_collision_fails_closed(self) -> None:
+    def test_exact_ip_or_public_port_collision_fails_closed(self) -> None:
         for body in (
             "server { listen 80; server_name 104.244.90.172; }\n",
             "server { listen 80; server_name\n  104.244.90.172; }\n",

@@ -1,4 +1,6 @@
+import contextlib
 import hashlib
+import io
 import json
 import os
 import sqlite3
@@ -32,6 +34,46 @@ class RegistrationTests(unittest.TestCase):
             self.assertNotRegex(
                 migration.path.read_text(encoding="utf-8"), r"\)\s+STRICT\s*;"
             )
+
+    def test_human_admin_output_escapes_historical_terminal_controls(self):
+        output = io.StringIO()
+        result = {
+            "username": "legacy\nuser",
+            "active_devices": 1,
+            "device_limit": 2,
+            "devices": [
+                {
+                    "device_id": "device-1",
+                    "status": "active",
+                    "platform": "windows\x1b]52;c;ZXZpbA==\x07",
+                    "app_version": "0.3.4\nforged\x9b31m\u202eevil",
+                    "last_seen_at": "2026-10-30T00:00:00Z",
+                }
+            ],
+        }
+        with contextlib.redirect_stdout(output):
+            license_admin._human(result)
+        rendered = output.getvalue()
+        self.assertNotIn("\x1b", rendered)
+        self.assertNotIn("\x07", rendered)
+        self.assertNotIn("\x9b", rendered)
+        self.assertNotIn("\u202e", rendered)
+        self.assertIn("legacy\\u000auser", rendered)
+        self.assertIn("\\u001b]52", rendered)
+        self.assertIn("0.3.4\\u000aforged\\u009b31m\\u202eevil", rendered)
+
+    def test_registration_rejects_nonprintable_and_bidi_identity_text(self):
+        for username, display_name in (
+            ("ali\x9bce", "Alice"),
+            ("ali\u202ece", "Alice"),
+            ("alice", "Ali\x1b]52;c;ZXZpbA==\x07ce"),
+            ("alice", "Ali\u202ece"),
+        ):
+            with self.subTest(username=username, display_name=display_name):
+                with self.assertRaises(register_user.RegistrationError):
+                    register_user.register_user(
+                        self.db, username, display_name, "free", None
+                    )
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

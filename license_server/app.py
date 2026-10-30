@@ -123,7 +123,7 @@ def create_app(
         public_manifest = manifest_for_signer(signer)
     database = Database(database_path)
     refresh_days = _env_int(
-        "REFRESH_TOKEN_DAYS", 30, minimum=1, maximum=3650
+        "REFRESH_TOKEN_DAYS", 365, minimum=1, maximum=3650
     )
     ticket_hours = _env_int(
         "LICENSE_TICKET_HOURS", 24, minimum=1, maximum=720

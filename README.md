@@ -14,16 +14,25 @@
 
 ## 当前生产部署基线
 
-- 服务端：`0.2.5`，SQLite schema `3`
+- 服务端：`0.2.6`，SQLite schema `3`
 - 服务器：`104.244.90.172`
-- 公网 Web/API：`https://104.244.90.172:9000`
+- 公网 Web/API：`http://104.244.90.172:9000`
 - 内部应用：`127.0.0.1:9100`，不对公网开放
 - SQLite3：服务器本机持久磁盘，只允许内部应用进程访问
 
-9000 必须使用 HTTPS，不能用明文 HTTP。详细拓扑、安全规则和客户端权限刷新协议见
-[`docs/DEPLOYMENT_104.244.90.172.md`](docs/DEPLOYMENT_104.244.90.172.md)。正式生产仍推荐为该 IP
-绑定专用域名，以简化未来迁移；当前已确定采用 Enterprise Linux 9 人工部署及受信任的 IP 短期
-证书。逐条部署手册见
+端点兼容性是硬门禁：Client `0.3.5` 只允许固定
+`http://104.244.90.172:9000`；Client `0.3.4` 及更旧版固定 HTTPS，不能向 Server `0.2.6`
+的默认 HTTP 入口刷新。如已有生产用户，必须协调发布 Client `0.3.5` 与 Server `0.2.6`，
+切换窗口内只能依靠已验签且仍在 `offline_until` 内的离线票据过渡。尚无生产用户时不构成部署阻断。
+
+当前按产品决策默认使用 `HTTP :9000`，Nginx 反向代理到只监听回环地址的应用。WebSocket 不是
+加密协议，不能替代 TLS，因此授权验证继续使用短连接 REST HTTP，不额外引入长连接状态。
+Ed25519 可以防止授权票据被伪造，但 HTTP 无法防止链路旁路者读取激活码或 refresh token；部署时
+应至少使用云安全组限制来源。`--tls-mode letsencrypt|existing` 只是未来路径：必须先发布内置
+匹配 HTTPS origin/信任策略的新客户端，然后才能在服务端传入 `--ack-client-https-origin-ready`。
+当前 Client `0.3.5` 不兼容 TLS 入口。
+详细拓扑、安全规则和客户端权限刷新协议见
+[`docs/DEPLOYMENT_104.244.90.172.md`](docs/DEPLOYMENT_104.244.90.172.md)。可选 TLS 的逐条手册见
 [`docs/MANUAL_DEPLOY_EL9_IP_CERT.md`](docs/MANUAL_DEPLOY_EL9_IP_CERT.md)。
 整体原理、数据模型、API、激活序列和运维边界见
 [`docs/LICENSE_SERVER_ARCHITECTURE.md`](docs/LICENSE_SERVER_ARCHITECTURE.md)。
@@ -39,7 +48,8 @@ proprietary 工程许可基线、第三方依赖来源、离线 SPDX 生成和�
 生产签名密钥的生成、幂等发布、客户端信任根同步、备份恢复和轮换见
 [`docs/SIGNING_KEY_OPERATIONS.md`](docs/SIGNING_KEY_OPERATIONS.md)。
 目标服务器的标准源码目录是 `/data/WeChatMemory-LicenseServer`，可从该目录执行
-`deploy/el9/deploy-from-data.sh`；证书通知邮箱默认为 `gladlygrady@tutamail.com`。
+`deploy/el9/deploy-from-data.sh`；默认 HTTP 模式不会使用邮箱或 Certbot。显式选择
+`letsencrypt` 时，证书通知邮箱默认为 `gladlygrady@tutamail.com`。
 若首次从已停用的 `entity-echo.com` 接管 `104.244.90.172` 时冲突文件仍存在，必须显式传入
 `--retire-nginx-conf /etc/nginx/conf.d/entityecho.conf`。它会在移出 active `conf.d` 前创建事务快照，
 失败时恢复原字节和 Nginx 运行态，成功时在 `/etc/wechat-memory-license/retired-nginx/`
@@ -177,7 +187,8 @@ python register_user.py init --db "$DATABASE_PATH"
 python -m license_server --host 127.0.0.1 --port 9100
 ```
 
-生产不使用 Flask 开发服务器，模块入口使用 Waitress。对公网的 TLS 只由 Nginx 终止。
+生产不使用 Flask 开发服务器，模块入口使用 Waitress。公网 HTTP 与未来可选的 TLS 都只由
+Nginx 接入，Waitress 始终只监听 `127.0.0.1:9100`。
 
 ## 当前套餐基线
 

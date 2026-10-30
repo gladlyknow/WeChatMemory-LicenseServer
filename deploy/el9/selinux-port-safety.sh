@@ -34,6 +34,7 @@ wkm_selinux_types_for_tcp_port() {
 
 configure_selinux() {
   local selinux_mode port_listing assigned_types boolean_state assigned_type
+  local acme_webroot="${ACME_WEBROOT:-/var/www/wechat-memory-license-acme}"
 
   if ! selinux_mode="$(getenforce 2>/dev/null)"; then
     echo "无法确定 SELinux 状态，拒绝修改端口标签。" >&2
@@ -90,5 +91,8 @@ configure_selinux() {
     echo "SELinux 布尔值返回了无法识别的状态，拒绝继续：${boolean_state}" >&2
     return 1
   fi
-  restorecon -RF /var/www/wechat-memory-license-acme
+  if [[ "${TLS_MODE:-http}" == "letsencrypt" ]] && \
+     [[ -d "${acme_webroot}" ]]; then
+    restorecon -RF "${acme_webroot}"
+  fi
 }

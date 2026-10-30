@@ -2,14 +2,16 @@
 Description=WeChat Memory License API
 After=network-online.target
 Wants=network-online.target
-ConditionPathExists=/opt/wechat-memory-license/current/license_server/__main__.py
+AssertPathExists=/opt/wechat-memory-license/current/license_server/__main__.py
 
 [Service]
-Type=simple
+Type=exec
 User=wkm-license
 Group=wkm-license
 WorkingDirectory=/opt/wechat-memory-license/current
 EnvironmentFile=/etc/wechat-memory-license/service.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStartPre=/opt/wechat-memory-license/current/.venv/bin/python /opt/wechat-memory-license/current/scripts/service_preflight.py --env /etc/wechat-memory-license/service.env --manifest /opt/wechat-memory-license/current/config/signing-public-keys.json
 ExecStart=/opt/wechat-memory-license/current/.venv/bin/python -m license_server --host 127.0.0.1 --port 9100 --threads 6
 Restart=on-failure
 RestartSec=5s

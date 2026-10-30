@@ -13,7 +13,6 @@ import base64
 import hashlib
 import json
 import os
-import re
 import secrets
 import sqlite3
 import sys
@@ -34,7 +33,6 @@ from license_server.migrations import (
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 MIN_SQLITE_VERSION = (3, 34, 1)
 PLAN_IDS = ("free", "permanent_personal", "pro_subscription")
-CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 PLAN_SEEDS = {
     "free": {
@@ -90,7 +88,9 @@ def normalize_username(value: str) -> tuple[str, str]:
     username = unicodedata.normalize("NFKC", value).strip()
     if len(username) < 3 or len(username) > 64:
         raise RegistrationError("用户名长度必须为 3～64 个字符")
-    if CONTROL_RE.search(username) or any(char.isspace() for char in username):
+    if not all(char.isprintable() for char in username) or any(
+        char.isspace() for char in username
+    ):
         raise RegistrationError("用户名不能包含空白或控制字符")
     return username, username.casefold()
 
@@ -191,7 +191,9 @@ def plan_snapshot(plan: sqlite3.Row) -> dict:
 def register_user(db_path: Path, username_value: str, display_name: str,
                   plan_id: str, days: int | None) -> dict:
     username, username_norm = normalize_username(username_value)
-    if len(display_name) > 100 or CONTROL_RE.search(display_name):
+    if len(display_name) > 100 or not all(
+        char.isprintable() for char in display_name
+    ):
         raise RegistrationError("显示名称不合法或超过 100 个字符")
     if days is not None and days <= 0:
         raise RegistrationError("--days 必须是正整数")
@@ -261,7 +263,7 @@ def register_user(db_path: Path, username_value: str, display_name: str,
             "expires_at": expires_at,
             "upgrade_until": upgrade_until,
             "activation_code": activation_code,
-            "activation_code_notice": "只显示一次；数据库不保存明文",
+            "activation_code_notice": "只显示一次；首次成功激活后立即失效；数据库不保存明文",
         }
     finally:
         con.close()
@@ -301,7 +303,7 @@ def print_result(result: dict, as_json: bool) -> None:
     print(f"套餐：{result['plan']['name']} ({result['plan']['id']})")
     print(f"设备上限：{result['plan']['device_limit']}")
     print(f"离线期限：{result['plan']['offline_grace_days']} 天")
-    print("激活码（只显示一次）：")
+    print("激活码（只显示一次，首次成功激活后立即失效）：")
     print(result["activation_code"])
 
 
