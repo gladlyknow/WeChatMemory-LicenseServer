@@ -1,5 +1,9 @@
 # Enterprise Linux 9 手工部署：IP 短期证书
 
+> 本文用于理解和人工排查底层步骤。常规生产部署优先使用
+> [`SERVER_OPERATIONS_RUNBOOK.md`](SERVER_OPERATIONS_RUNBOOK.md) 与
+> [`ONE_CLICK_DEPLOY_AND_ADMIN.md`](ONE_CLICK_DEPLOY_AND_ADMIN.md)。
+
 > 目标服务器：`104.224.90.172`  
 > 公网入口：`https://104.224.90.172:9000`  
 > 适用范围：RHEL 9、Rocky Linux 9、AlmaLinux 9、Oracle Linux 9、CentOS Stream 9  
@@ -40,7 +44,7 @@ IP 短期证书当前有效期为 160 小时（约 6 天 16 小时）。所以�
 2. 上游没有把 80 或 9000 转发给别的主机；
 3. 系统已升级到当前 EL9 小版本；
 4. 服务器时间同步正常；
-5. 已准备一个可接收证书异常提醒的运维邮箱；
+5. 证书通知邮箱为 `gladlygrady@tutamail.com`；
 6. 已准备异地加密备份位置和管理员固定来源 IP。
 
 ## 3. 安装基础包
@@ -125,11 +129,11 @@ http://104.224.90.172/.well-known/acme-challenge/probe
 
 ### 6.2 先测试 CA，再签发正式证书
 
-把 `<运维邮箱>` 换成真实地址。先使用 staging，避免排错时触发正式环境限制：
+先使用 staging，避免排错时触发正式环境限制：
 
 ```bash
 sudo /opt/certbot/bin/certbot certonly --staging --non-interactive \
-  --agree-tos --email '<运维邮箱>' \
+  --agree-tos --email 'gladlygrady@tutamail.com' \
   --preferred-profile shortlived \
   --webroot --webroot-path /var/www/wechat-memory-license-acme \
   --ip-address 104.224.90.172 --cert-name 104.224.90.172
@@ -139,7 +143,7 @@ staging 成功后删除 `--staging`，再次运行同一命令签发正式证书
 
 ```bash
 sudo /opt/certbot/bin/certbot certonly --non-interactive \
-  --agree-tos --email '<运维邮箱>' \
+  --agree-tos --email 'gladlygrady@tutamail.com' \
   --preferred-profile shortlived \
   --webroot --webroot-path /var/www/wechat-memory-license-acme \
   --ip-address 104.224.90.172 --cert-name 104.224.90.172
@@ -294,7 +298,7 @@ curl --fail --silent --show-error https://104.224.90.172:9000/v1/keys
 1. 在隔离构建环境生成带版本号的发布包并校验 SHA-256；
 2. 上传到新的 `releases/<版本>`，所有者为 `root:root`，应用代码只读；
 3. 用副本数据库运行迁移测试和完整性检查；
-4. 备份当前 SQLite 数据库、WAL 和配置，并完成一次可读取验证；
+4. 使用 SQLite `.backup` 备份当前数据库，单独保留匹配配置，并完成一次完整性验证；
 5. 停止应用，执行受版本控制的迁移，切换 `current`；
 6. 启动应用，检查本机 `127.0.0.1:9100/healthz`；
 7. 检查公网 `https://104.224.90.172:9000/healthz`；
@@ -316,11 +320,11 @@ SQLite 备份必须使用 SQLite Online Backup API 或 `sqlite3 .backup`，不�
 - [ ] 客户端在正常、到期、离线宽限、设备超限时行为均符合套餐；
 - [ ] 已做数据库恢复演练和上一版本回滚演练。
 
-## 12. 尚未确定但不阻塞基础设施准备
+## 12. 上线前仍需由运维确定的组织项
 
 - EL9 的具体发行版与小版本；
 - SSH 管理来源 IP/VPN；
-- 运维邮箱；
+- 远程监控告警的接收与升级流程；
 - 异地加密备份目标和保留周期；
 - Ed25519 签名私钥使用的 KMS/HSM；
 - 管理端 MFA 方案。

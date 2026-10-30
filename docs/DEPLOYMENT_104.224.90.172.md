@@ -3,6 +3,7 @@
 > 状态：授权 Web/API 已实现；等待在目标服务器手工部署
 > 公网入口：`https://104.224.90.172:9000`
 > 已确定：Enterprise Linux 9 系列、人工部署、Let's Encrypt IP 短期证书
+> 当前生产命令以 [`SERVER_OPERATIONS_RUNBOOK.md`](SERVER_OPERATIONS_RUNBOOK.md) 为准。
 
 逐条部署命令、Nginx 配置、SELinux、防火墙及续期方案见
 [`MANUAL_DEPLOY_EL9_IP_CERT.md`](MANUAL_DEPLOY_EL9_IP_CERT.md)。
@@ -12,10 +13,10 @@
 ```mermaid
 flowchart LR
     Client["Windows/Ubuntu 客户端"] -->|"HTTPS :9000"| Proxy["Nginx TLS + 限流"]
-    Admin["管理 Web"] -->|"HTTPS :9000/admin"| Proxy
-    Proxy -->|"HTTP loopback :9100"| API["授权 Web/API 单主实例"]
+    Admin["SSH 管理员"] -->|"wkm-license-admin"| API["授权 API 单主实例"]
+    Proxy -->|"HTTP loopback :9100"| API
     API --> DB["本机 SQLite3 WAL"]
-    API --> KMS["KMS/HSM Ed25519"]
+    API --> Key["受限文件 Ed25519<br/>未来可迁移 KMS/HSM"]
     API --> Backup["加密异地备份"]
 ```
 
@@ -69,7 +70,7 @@ header。反向代理访问日志必须过滤 Authorization、Cookie、激活码
 客户端 → POST /v1/activate
          username + activation_code + install_id + device_hash
 服务端 → 验证用户、激活码摘要、套餐状态、设备配额
-服务端 → 绑定设备并返回短期 access token、轮换 refresh token、签名 license ticket
+服务端 → 绑定设备并返回轮换 refresh token 和签名 license ticket
 客户端 → 用内置 Ed25519 公钥验证 license ticket，随后存入 DPAPI/系统密钥环
 ```
 

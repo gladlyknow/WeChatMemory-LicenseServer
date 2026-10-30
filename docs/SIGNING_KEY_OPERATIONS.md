@@ -3,6 +3,7 @@
 > 本文的首要原则：`key_id` 一旦与公钥绑定，永不改绑。当前
 > `2026-10-30` 私钥如果丢失，只能恢复加密离线备份；严禁使用相同 `key_id`
 > 重新生成。
+> 总体值班与部署路径见 [`SERVER_OPERATIONS_RUNBOOK.md`](SERVER_OPERATIONS_RUNBOOK.md)。
 
 ## 1. 信任模型
 
@@ -27,13 +28,29 @@ CSPRNG 生成，再序列化为未加密 PKCS#8 PEM。它的公钥是唯一派�
 启动；它依靠 `root:wkm-license 0640` 、受限目录和 systemd 沙箱保护。
 离线备份则必须另外加密。
 
-在源码目录执行：
+环境必须明确区分：
+
+- 受控 Ubuntu 开发/密钥管理机负责生成私钥、修改公开清单和同步客户端，使用项目 `.venv`；
+- 生产 EL9 服务器只验证、安装和使用已审核私钥，使用 `/opt/wechat-memory-license/venv`；
+- 生产服务器不修改 Git 公开清单，不临时生成新私钥。
+
+在保存当前匹配私钥的 Ubuntu 开发/密钥管理机上执行：
 
 ```bash
-python -m license_server signing-key verify \
-  --path /root/wkm-signing-ed25519.pem \
+.venv/bin/python -m license_server signing-key verify \
+  --path .secrets/signing-ed25519.pem \
   --key-id 2026-10-30 \
   --manifest config/signing-public-keys.json
+```
+
+生产服务器安装后的只读验证：
+
+```bash
+cd /data/WeChatMemory-LicenseServer
+sudo /opt/wechat-memory-license/venv/bin/python -m license_server signing-key verify \
+  --path /etc/wechat-memory-license/signing-ed25519-2026-10-30.pem \
+  --key-id 2026-10-30 \
+  --manifest /opt/wechat-memory-license/current/config/signing-public-keys.json
 ```
 
 该命令只输出公开元数据。任意一项不匹配都会以非零退出，部署器也会在安装前执行同等校验。
@@ -48,8 +65,8 @@ python -m license_server signing-key verify \
 
 ```bash
 umask 077
-python -m license_server signing-key ensure \
-  --path /root/wkm-signing-ed25519-2027-04-01.pem \
+.venv/bin/python -m license_server signing-key ensure \
+  --path .secrets/signing-ed25519-2027-04-01.pem \
   --key-id 2027-04-01 \
   --manifest config/signing-public-keys.json \
   --publish
@@ -67,7 +84,7 @@ python -m license_server signing-key ensure \
 
 ```bash
 git diff -- config/signing-public-keys.json
-python -m license_server signing-key manifest \
+.venv/bin/python -m license_server signing-key manifest \
   --manifest config/signing-public-keys.json
 ```
 
@@ -79,10 +96,10 @@ python -m license_server signing-key manifest \
 install -m 0644 \
   ../WeChatMemory-LicenseServer/config/signing-public-keys.json \
   security/license-public-keys.json
-python scripts/sync_license_public_keys.py \
+.venv/bin/python scripts/sync_license_public_keys.py \
   --manifest ../WeChatMemory-LicenseServer/config/signing-public-keys.json
-python scripts/sync_license_public_keys.py --check
-python -m pytest tests/test_license_trust.py -q
+.venv/bin/python scripts/sync_license_public_keys.py --check
+.venv/bin/python -m pytest tests/test_license_trust.py -q
 git diff -- security/license-public-keys.json src/wechat_memory/license_trust.py
 ```
 
@@ -93,15 +110,17 @@ git diff -- security/license-public-keys.json src/wechat_memory/license_trust.py
 客户端信任根发布完成后，才执行：
 
 ```bash
-python -m license_server signing-key publish \
-  --path /root/wkm-signing-ed25519-2027-04-01.pem \
+.venv/bin/python -m license_server signing-key publish \
+  --path .secrets/signing-ed25519-2027-04-01.pem \
   --key-id 2027-04-01 \
   --manifest config/signing-public-keys.json \
   --activate
 ```
 
 该操作会把新密钥设为唯一 `active`，把之前的 `active` 改为 `retiring`。
-审核、提交并推送公开清单后，部署新活动私钥：
+审核、提交并推送公开清单后，通过受控 SSH/SCP 通道把
+`.secrets/signing-ed25519-2027-04-01.pem` 安全上传为生产服务器
+`/root/wkm-signing-ed25519-2027-04-01.pem`，设置 `root:root 0600`，再在服务器部署：
 
 ```bash
 sudo bash deploy/el9/deploy-from-data.sh \
@@ -152,10 +171,10 @@ sudo chmod 0400 /media/offline/wkm-signing-2026-10-30.encrypted.pem
 ```bash
 sudo chown root:root /root/wkm-signing-ed25519.pem
 sudo chmod 0600 /root/wkm-signing-ed25519.pem
-python -m license_server signing-key verify \
+sudo /opt/wechat-memory-license/venv/bin/python -m license_server signing-key verify \
   --path /root/wkm-signing-ed25519.pem \
   --key-id 2026-10-30 \
-  --manifest config/signing-public-keys.json
+  --manifest /opt/wechat-memory-license/current/config/signing-public-keys.json
 ```
 
 ## 5. 故障处理
@@ -171,9 +190,9 @@ python -m license_server signing-key verify \
 ## 6. 发布前检查
 
 ```bash
-python -m license_server signing-key manifest \
+.venv/bin/python -m license_server signing-key manifest \
   --manifest config/signing-public-keys.json
-python -m unittest discover -s tests -v
+.venv/bin/python -m unittest discover -s tests -v
 bash -n deploy/el9/*.sh deploy/el9/wkm-license-admin
 git diff --check
 git status --short

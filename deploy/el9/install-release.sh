@@ -74,11 +74,25 @@ fi
 find "${RELEASE_DIR}" -type d -exec chmod 0755 {} +
 find "${RELEASE_DIR}" -type f -exec chmod 0644 {} +
 
-if [[ ! -x "${APP_ROOT}/venv/bin/python" ]]; then
-  python3.11 -m venv "${APP_ROOT}/venv"
-fi
-"${APP_ROOT}/venv/bin/pip" install --upgrade pip
-"${APP_ROOT}/venv/bin/pip" install --no-cache-dir "${RELEASE_DIR}"
+REQUIRED_RELEASE_DOCUMENTS=(
+  README.md
+  docs/README.md
+  docs/DOCUMENTATION_POLICY.md
+  docs/SERVER_OPERATIONS_RUNBOOK.md
+  docs/LICENSE_SERVER_ARCHITECTURE.md
+  docs/ONE_CLICK_DEPLOY_AND_ADMIN.md
+  docs/MANUAL_DEPLOY_EL9_IP_CERT.md
+  docs/SIGNING_KEY_OPERATIONS.md
+  docs/DEPLOYMENT_104.224.90.172.md
+  scripts/check_documentation.py
+)
+for required_document in "${REQUIRED_RELEASE_DOCUMENTS[@]}"; do
+  if [[ ! -f "${RELEASE_DIR}/${required_document}" ]]; then
+    echo "发布物缺少必需文档或校验器：${required_document}" >&2
+    exit 3
+  fi
+done
+python3.11 "${RELEASE_DIR}/scripts/check_documentation.py"
 
 if [[ -f "${DATABASE_PATH}" ]]; then
   if ! command -v sqlite3 >/dev/null 2>&1; then
@@ -95,6 +109,12 @@ if [[ -f "${DATABASE_PATH}" ]]; then
   fi
   chmod 0600 "${BACKUP_PATH}"
 fi
+
+if [[ ! -x "${APP_ROOT}/venv/bin/python" ]]; then
+  python3.11 -m venv "${APP_ROOT}/venv"
+fi
+"${APP_ROOT}/venv/bin/pip" install --upgrade pip
+"${APP_ROOT}/venv/bin/pip" install --no-cache-dir "${RELEASE_DIR}"
 
 MANIFEST_PATH="${RELEASE_DIR}/config/signing-public-keys.json"
 KEY_PATH="${CONFIG_ROOT}/signing-ed25519-${KEY_ID}.pem"

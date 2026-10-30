@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 umask 077
 
 PUBLIC_IP="104.224.90.172"
@@ -106,6 +106,13 @@ fi
 
 dnf install -y nginx firewalld policycoreutils-python-utils sqlite curl openssl \
   python3.11 python3.11-pip
+
+if [[ ! -f "${SOURCE_DIR}/scripts/check_documentation.py" ]]; then
+  echo "源码缺少文档契约校验器。" >&2
+  exit 3
+fi
+python3.11 "${SOURCE_DIR}/scripts/check_documentation.py"
+
 systemctl enable --now firewalld
 
 install -d -o nginx -g nginx -m 0755 /var/www/wechat-memory-license-acme
@@ -120,12 +127,63 @@ setsebool -P httpd_can_network_connect 1
 restorecon -RF /var/www/wechat-memory-license-acme
 
 BOOTSTRAP=/etc/nginx/conf.d/wechat-memory-license.conf
-sed "s/104\.224\.90\.172/${PUBLIC_IP}/g" \
-  "${SOURCE_DIR}/deploy/el9/nginx-bootstrap.conf" >"${BOOTSTRAP}.tmp"
-install -o root -g root -m 0644 "${BOOTSTRAP}.tmp" "${BOOTSTRAP}"
-rm -f -- "${BOOTSTRAP}.tmp"
-nginx -t
-systemctl enable --now nginx
+NGINX_CONFIG_BACKUP=""
+NGINX_CONFIG_ORIGINALLY_EXISTED=0
+NGINX_CONFIG_CHANGED=0
+DEPLOY_COMPLETED=0
+
+backup_nginx_config() {
+  if [[ -z "${NGINX_CONFIG_BACKUP}" && -f "${BOOTSTRAP}" ]]; then
+    NGINX_CONFIG_BACKUP="$(mktemp /etc/nginx/.wechat-memory-license.backup.XXXXXX)"
+    install -o root -g root -m 0600 "${BOOTSTRAP}" "${NGINX_CONFIG_BACKUP}"
+    NGINX_CONFIG_ORIGINALLY_EXISTED=1
+  fi
+}
+
+restore_nginx_config() {
+  if (( ! NGINX_CONFIG_CHANGED )); then
+    return
+  fi
+  set +e
+  if (( NGINX_CONFIG_ORIGINALLY_EXISTED )) && [[ -f "${NGINX_CONFIG_BACKUP}" ]]; then
+    install -o root -g root -m 0644 "${NGINX_CONFIG_BACKUP}" "${BOOTSTRAP}"
+  else
+    rm -f -- "${BOOTSTRAP}"
+  fi
+  if nginx -t; then
+    systemctl reload nginx || true
+  else
+    echo "Nginx 旧配置恢复后仍未通过校验，请立即人工处理。" >&2
+  fi
+  set -e
+}
+
+on_deploy_exit() {
+  local status=$?
+  trap - EXIT ERR
+  if (( ! DEPLOY_COMPLETED )); then
+    restore_nginx_config
+    if [[ -n "${NGINX_CONFIG_BACKUP}" ]]; then
+      rm -f -- "${NGINX_CONFIG_BACKUP}"
+    fi
+  fi
+  exit "${status}"
+}
+trap on_deploy_exit EXIT
+
+if [[ -f "${BOOTSTRAP}" ]] && nginx -t >/dev/null 2>&1; then
+  echo "已存在通过校验的 Nginx 配置，升级期间保持当前 9000 入口。"
+  systemctl enable --now nginx
+else
+  backup_nginx_config
+  sed "s/104\.224\.90\.172/${PUBLIC_IP}/g" \
+    "${SOURCE_DIR}/deploy/el9/nginx-bootstrap.conf" >"${BOOTSTRAP}.tmp"
+  install -o root -g root -m 0644 "${BOOTSTRAP}.tmp" "${BOOTSTRAP}"
+  rm -f -- "${BOOTSTRAP}.tmp"
+  NGINX_CONFIG_CHANGED=1
+  nginx -t
+  systemctl enable --now nginx
+fi
 
 TLS_CERT=""
 TLS_KEY=""
@@ -184,6 +242,7 @@ bash "${SOURCE_DIR}/deploy/el9/install-release.sh" \
   "${SOURCE_DIR}" "${SIGNING_KEY}" "${KEY_ID}"
 
 PRODUCTION_TMP=/etc/nginx/conf.d/.wechat-memory-license.production.tmp
+backup_nginx_config
 sed -e "s#ssl_certificate     /etc/letsencrypt/live/104.224.90.172/fullchain.pem;#ssl_certificate     ${TLS_CERT};#" \
     -e "s#ssl_certificate_key /etc/letsencrypt/live/104.224.90.172/privkey.pem;#ssl_certificate_key ${TLS_KEY};#" \
     -e "s/104\.224\.90\.172/${PUBLIC_IP}/g" \
@@ -193,6 +252,7 @@ sed -e "s#ssl_certificate     /etc/letsencrypt/live/104.224.90.172/fullchain.pem
     "${SOURCE_DIR}/deploy/el9/nginx-production.conf" >"${PRODUCTION_TMP}"
 install -o root -g root -m 0644 "${PRODUCTION_TMP}" "${BOOTSTRAP}"
 rm -f -- "${PRODUCTION_TMP}"
+NGINX_CONFIG_CHANGED=1
 nginx -t
 systemctl reload nginx
 systemctl daemon-reload
@@ -206,6 +266,12 @@ curl --fail --silent --show-error --connect-timeout 5 --max-time 20 \
   "https://${PUBLIC_IP}:${PUBLIC_PORT}/readyz" >/dev/null
 PUBLIC_KEY_JSON="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 20 \
   "https://${PUBLIC_IP}:${PUBLIC_PORT}/v1/keys")"
+
+DEPLOY_COMPLETED=1
+trap - EXIT ERR
+if [[ -n "${NGINX_CONFIG_BACKUP}" ]]; then
+  rm -f -- "${NGINX_CONFIG_BACKUP}"
+fi
 
 echo
 echo "部署完成：https://${PUBLIC_IP}:${PUBLIC_PORT}"

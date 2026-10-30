@@ -3,6 +3,8 @@
 > 基线：License Server `0.2.1` / Client `0.3.2`
 > 公网入口：`https://104.224.90.172:9000`
 > 存储：单机 SQLite3，客户聊天数据不上云。
+> 文档导航见 [`README.md`](README.md)，生产操作见
+> [`SERVER_OPERATIONS_RUNBOOK.md`](SERVER_OPERATIONS_RUNBOOK.md)。
 
 ## 1. 服务端仅解决什么问题
 
@@ -23,7 +25,7 @@ flowchart LR
     A --> D["SQLite3 WAL<br/>/var/lib/wechat-memory-license"]
     A --> K["Ed25519 私钥<br/>/etc/wechat-memory-license"]
     D --> B["加密异地备份"]
-    O["运维管理员"] -->|"SSH 固定来源"| R["register_user.py"]
+    O["运维管理员"] -->|"SSH 固定来源"| R["wkm-license-admin"]
     R --> D
 ```
 
@@ -99,11 +101,8 @@ SQLite 强制外键、WAL、`synchronous=FULL`、5 秒 busy timeout；写入使�
 ### 5.1 创建用户（管理员）
 
 ```bash
-sudo -u wkm-license /opt/wechat-memory-license/venv/bin/python \
-  /opt/wechat-memory-license/current/register_user.py add \
-  --db /var/lib/wechat-memory-license/license.sqlite3 \
-  --username customer-demo \
-  --plan permanent_personal
+sudo wkm-license-admin add \
+  --username customer-demo --plan permanent_personal
 ```
 
 脚本只在当次标准输出显示一次激活码。不能从 SQLite 恢复明文；丢失后应吊销旧凭据并创建新码，
@@ -169,12 +168,12 @@ SIGNING_PUBLIC_KEYS_PATH=/opt/wechat-memory-license/current/config/signing-publi
 
 ## 8. 发布、备份和回滚
 
-1. 在开发环境执行服务端单元测试，生成发布包和 SHA-256。
-2. 上传到服务器新的 staging 目录，不覆盖正在运行的 release。
-3. 使用 SQLite Online Backup 或 `.backup` 创建一致备份，对备份执行 `integrity_check`。
-4. 运行 `deploy/el9/install-release.sh <source> [first-key.pem] [key-id]`；脚本创建不可变 release，安装依赖，初始化数据库，原子切换 `current`。
-5. systemd 启动后检查 `127.0.0.1:9100/readyz`；失败时脚本尝试回滚上一个代码链接。
-6. 最后检查公网 HTTPS 证书、`/healthz`、`/v1/keys`和一个专用验收用户的激活/刷新流程。
+1. 在开发环境执行单元测试、Shell 语法和文档契约检查。
+2. 只把已审核变更提交到 `main`；服务器 `/data/WeChatMemory-LicenseServer` 保持干净。
+3. 运行 `deploy/el9/deploy-from-data.sh`；它执行 fast-forward、SQLite `.backup`、完整性检查、
+   不可变 release 创建、`current` 原子切换和 systemd 重启。
+4. 启动或本机 `/readyz` 失败时，脚本同时回滚 `current` 和 `service.env`。
+5. 最后检查公网 HTTPS 证书、`/healthz`、`/v1/keys`、SQLite 以及专用验收用户。
 
 备份必须加密后异地保存，并定期真实恢复；单纯“备份文件存在”不是可恢复性证据。
 

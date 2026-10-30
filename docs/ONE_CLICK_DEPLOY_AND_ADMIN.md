@@ -3,6 +3,8 @@
 > 目标：Enterprise Linux 9，公网 `https://104.224.90.172:9000`
 > 架构：Nginx TLS → `127.0.0.1:9100` 授权 API → 本机 SQLite3
 > 适用：首次安装、后续升级、新增用户、套餐调整、续期、停用和设备解绑
+> 文档导航见 [`README.md`](README.md)，值班、完整恢复和回滚见
+> [`SERVER_OPERATIONS_RUNBOOK.md`](SERVER_OPERATIONS_RUNBOOK.md)。
 
 ## 1. 一次性部署结构
 
@@ -214,8 +216,8 @@ sudo bash deploy/el9/deploy-from-data.sh
 
 部署完成后统一使用：
 
-```text
-sudo wkm-license-admin <命令>
+```bash
+sudo wkm-license-admin --help
 ```
 
 它会以 `wkm-license` 身份访问固定数据库：
@@ -377,27 +379,39 @@ sudo wkm-license-admin devices --username alice
 解绑设备：
 
 ```bash
+read -r -p '请输入要解绑的完整设备 ID：' WKM_DEVICE_ID
+if [[ ! "${WKM_DEVICE_ID}" =~ ^[0-9A-Fa-f-]{36}$ ]]; then
+  echo '设备 ID 格式不合法' >&2; exit 2
+fi
 sudo wkm-license-admin device-status \
   --username alice \
-  --device-id <设备ID> \
+  --device-id "${WKM_DEVICE_ID}" \
   --status deactivated
 ```
 
 封禁疑似被盗设备：
 
 ```bash
+read -r -p '请输入要封禁的完整设备 ID：' WKM_DEVICE_ID
+if [[ ! "${WKM_DEVICE_ID}" =~ ^[0-9A-Fa-f-]{36}$ ]]; then
+  echo '设备 ID 格式不合法' >&2; exit 2
+fi
 sudo wkm-license-admin device-status \
   --username alice \
-  --device-id <设备ID> \
+  --device-id "${WKM_DEVICE_ID}" \
   --status blocked
 ```
 
 恢复设备：
 
 ```bash
+read -r -p '请输入要恢复的完整设备 ID：' WKM_DEVICE_ID
+if [[ ! "${WKM_DEVICE_ID}" =~ ^[0-9A-Fa-f-]{36}$ ]]; then
+  echo '设备 ID 格式不合法' >&2; exit 2
+fi
 sudo wkm-license-admin device-status \
   --username alice \
-  --device-id <设备ID> \
+  --device-id "${WKM_DEVICE_ID}" \
   --status active
 ```
 
@@ -420,13 +434,19 @@ sudo ls -l /var/lib/wechat-memory-license/backups
 恢复前必须确认备份完整，并停止写入：
 
 ```bash
-sudo systemctl stop wechat-memory-license
-sudo -u wkm-license sqlite3 /var/lib/wechat-memory-license/backups/<备份文件> \
+read -r -p '请输入要验证的备份文件名：' WKM_BACKUP_NAME
+if [[ ! "${WKM_BACKUP_NAME}" =~ ^license-[0-9]{8}T[0-9]{6}Z(-[0-9]+)?\.sqlite3$ ]]; then
+  echo '备份文件名格式不合法' >&2; exit 2
+fi
+sudo -u wkm-license sqlite3 \
+  "/var/lib/wechat-memory-license/backups/${WKM_BACKUP_NAME}" \
   'PRAGMA integrity_check;'
 ```
 
 恢复属于高风险操作，应先保留当前数据库，再使用 SQLite `.restore`，完成后重新检查完整性、文件权限
 和 `/readyz`。不要在服务运行时直接复制单独的 `.sqlite3` 文件，因为 WAL 中可能仍有未合并数据。
+可执行的停服务恢复、原数据保留和恢复失败回退步骤见
+[`SERVER_OPERATIONS_RUNBOOK.md`](SERVER_OPERATIONS_RUNBOOK.md#62-数据库恢复)。
 
 ## 12. 日志和故障排查
 
