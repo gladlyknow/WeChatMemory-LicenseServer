@@ -47,6 +47,20 @@ IP 短期证书当前有效期为 160 小时（约 6 天 16 小时）。所以�
 5. 证书通知邮箱为 `gladlygrady@tutamail.com`；
 6. 已准备异地加密备份位置和管理员固定来源 IP。
 
+在任何安装、防火墙或 Nginx 变更前，先执行与一键部署相同的只读归属门禁：
+
+```bash
+PUBLIC_IP=104.224.90.172
+source /data/WeChatMemory-LicenseServer/deploy/el9/public-ip-safety.sh
+wkm_assert_public_ip_bound "${PUBLIC_IP}" 0
+```
+
+返回非零时必须停止。例如 `104.224.90.172` 和 `104.244.90.172` 只差一位，也必须拒绝；
+不能通过改写现有 Nginx 业务配置来“适配”错误的 IP。如果该公网 IP 是云平台已人工验证的
+1:1 NAT/EIP，不会出现在客户机 `scope global` 列表中，一键部署才可显式使用
+`--allow-unbound-public-ip`。启用例外前必须先在云平台核对绑定/NAT，并从服务器外部验证 TCP/80；
+出站 NAT 地址不能作为入站归属证明。
+
 ## 3. 安装基础包
 
 以下命令以 root 或具备 sudo 权限的管理员执行：
@@ -99,15 +113,21 @@ sudo firewall-cmd --zone="${PUBLIC_ZONE}" --add-service=http
 sudo firewall-cmd --zone="${PUBLIC_ZONE}" --permanent --add-service=http
 sudo firewall-cmd --zone="${PUBLIC_ZONE}" --add-port=9000/tcp
 sudo firewall-cmd --zone="${PUBLIC_ZONE}" --permanent --add-port=9000/tcp
-sudo semanage port -a -t http_port_t -p tcp 9000
-sudo setsebool -P httpd_can_network_connect 1
-sudo restorecon -RFv /var/www/wechat-memory-license-acme
+sudo bash -Eeuo pipefail -c '
+  PUBLIC_PORT=9000
+  SELINUX_PORT_ADDED=0
+  SELINUX_BOOLEAN_CHANGED=0
+  source /data/WeChatMemory-LicenseServer/deploy/el9/selinux-port-safety.sh
+  configure_selinux
+'
 ```
 
 不使用 `firewall-cmd --reload`，因为它会重建整个 firewalld 运行态，并可能清除其他业务的临时规则。
-若 `semanage port -a` 提示 9000 已定义，执行
-`sudo semanage port -l | grep -w 9000`。只有它已归属 `http_port_t` 时才可继续；若归属其他类型，
-停止部署并选择新端口，不得用 `semanage port -m` 抢占。
+安全库会先读取 `getenforce`：返回 Disabled 时完全不调用
+`semanage`/`getsebool`/`setsebool`；返回 Enforcing 或 Permissive 时，先读取完整
+`semanage port -l` 输出并解析单端口和端口段。只有 9000/tcp 完全未分配时才执行
+`semanage port -a`；已归属 `http_port_t` 时不重复写入，已归属其他任何类型时立即失败关闭。
+不得用 `semanage port -m` 抢占，也不得在 `semanage port -a` 失败后把“正在修改”当作可接受的自动回退。
 
 不要关闭 SELinux，也不要开放 9100。
 

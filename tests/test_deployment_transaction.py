@@ -255,6 +255,15 @@ class DeploymentTransactionTests(unittest.TestCase):
         self.assertNotIn("firewall-cmd --reload", script)
         self.assertNotIn("systemctl enable --now firewalld", script)
         self.assertNotIn("semanage port -m", script)
+        self.assertIn("selinux-port-safety.sh", script)
+        selinux_safety = (
+            ROOT / "deploy/el9/selinux-port-safety.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn('case "${selinux_mode}"', selinux_safety)
+        self.assertIn("Disabled)", selinux_safety)
+        self.assertIn("wkm_selinux_types_for_tcp_port", selinux_safety)
+        self.assertNotIn("semanage port -m", selinux_safety)
+        self.assertNotIn("for (index =", selinux_safety)
         self.assertIn("--cert-name 104.224.90.172", service)
         self.assertIn("/opt/wechat-memory-license-certbot/bin/certbot", service)
         self.assertIn("ReadWritePaths=/etc/letsencrypt", service)

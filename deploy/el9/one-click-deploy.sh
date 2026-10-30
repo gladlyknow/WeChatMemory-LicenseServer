@@ -14,6 +14,7 @@ EXISTING_KEY=""
 CERTBOT_VERSION="5.9.0"
 CERTBOT_ROOT="/opt/wechat-memory-license-certbot"
 FIREWALL_ZONE=""
+ALLOW_UNBOUND_PUBLIC_IP=0
 
 usage() {
   cat <<'EOF'
@@ -33,6 +34,8 @@ usage() {
   --tls-key PATH           existing 模式的 TLS 私钥
   --certbot-version VER    默认 5.9.0，最低必须为 5.4
   --firewall-zone ZONE     firewalld 活动 zone；多 zone 主机必须显式指定
+  --allow-unbound-public-ip
+                           仅限已人工验证的 1:1 NAT/EIP；跳过本机 IP 归属门禁
 
 升级时服务器已经安装签名私钥和 TLS 证书，可省略 --signing-key 和 --email。
 EOF
@@ -51,6 +54,7 @@ while [[ $# -gt 0 ]]; do
     --tls-key) EXISTING_KEY="$2"; shift 2 ;;
     --certbot-version) CERTBOT_VERSION="$2"; shift 2 ;;
     --firewall-zone) FIREWALL_ZONE="$2"; shift 2 ;;
+    --allow-unbound-public-ip) ALLOW_UNBOUND_PUBLIC_IP=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "未知参数：$1" >&2; usage >&2; exit 2 ;;
   esac
@@ -92,12 +96,25 @@ if [[ ! -f "${SOURCE_DIR}/pyproject.toml" || ! -f "${SOURCE_DIR}/license_server/
   echo "--source 不是有效的授权服务源码目录。" >&2
   exit 2
 fi
+if [[ ! -f "${SOURCE_DIR}/deploy/el9/public-ip-safety.sh" ]]; then
+  echo "源码缺少公网 IP 归属安全库。" >&2
+  exit 3
+fi
+# shellcheck source=public-ip-safety.sh
+. "${SOURCE_DIR}/deploy/el9/public-ip-safety.sh"
+wkm_assert_public_ip_bound "${PUBLIC_IP}" "${ALLOW_UNBOUND_PUBLIC_IP}"
 if [[ ! -f "${SOURCE_DIR}/deploy/el9/deployment-transaction.sh" ]]; then
   echo "源码缺少部署事务库。" >&2
   exit 3
 fi
 # shellcheck source=deployment-transaction.sh
 . "${SOURCE_DIR}/deploy/el9/deployment-transaction.sh"
+if [[ ! -f "${SOURCE_DIR}/deploy/el9/selinux-port-safety.sh" ]]; then
+  echo "源码缺少 SELinux 共存安全库。" >&2
+  exit 3
+fi
+# shellcheck source=selinux-port-safety.sh
+. "${SOURCE_DIR}/deploy/el9/selinux-port-safety.sh"
 if ! wkm_version_at_least "${CERTBOT_VERSION}" 5 4; then
   echo "--certbot-version 必须不低于 5.4.0。" >&2
   exit 2
@@ -265,37 +282,6 @@ configure_firewall() {
       --add-port="${PUBLIC_PORT}/tcp" >/dev/null
     FIREWALL_PERMANENT_PORT_ADDED=1
   fi
-}
-
-selinux_http_port_contains() {
-  semanage port -l | awk -v wanted="${PUBLIC_PORT}" '
-    $1 == "http_port_t" && $2 == "tcp" {
-      for (index = 3; index <= NF; index++) {
-        value = $index
-        gsub(/,/, "", value)
-        if (value == wanted) found = 1
-        split(value, bounds, "-")
-        if (length(bounds) == 2 && wanted >= bounds[1] && wanted <= bounds[2]) found = 1
-      }
-    }
-    END { exit(found ? 0 : 1) }
-  '
-}
-
-configure_selinux() {
-  if ! selinux_http_port_contains; then
-    if semanage port -a -t http_port_t -p tcp "${PUBLIC_PORT}"; then
-      SELINUX_PORT_ADDED=1
-    else
-      echo "${PUBLIC_PORT}/tcp 可能已属于其他 SELinux 类型；为避免破坏同机业务，拒绝改写既有端口类型。" >&2
-      return 1
-    fi
-  fi
-  if ! getsebool httpd_can_network_connect | grep -Fq -- '--> on'; then
-    setsebool -P httpd_can_network_connect 1
-    SELINUX_BOOLEAN_CHANGED=1
-  fi
-  restorecon -RF /var/www/wechat-memory-license-acme
 }
 
 restore_host_prerequisites() {

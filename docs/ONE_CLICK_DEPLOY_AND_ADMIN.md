@@ -73,6 +73,15 @@ Let's Encrypt 的 IP 地址证书必须使用短期证书配置。Certbot 需要
 - <https://letsencrypt.org/2026/03/11/shorter-certs-certbot>
 - <https://letsencrypt.org/ca/docs/profiles/>
 
+一键部署器会在安装软件、改防火墙、写 Nginx 或调用 Certbot 之前，用
+`ip -o -4 addr show scope global` 读取本机地址，并对 `--public-ip` 执行完全相等匹配。
+例如本机是 `104.244.90.172`，而参数误写成 `104.224.90.172`，脚本会立即失败且不会进入
+Certbot。这是对输入错误和目标主机登录错误的强制门禁，不能用出站 IP 查询代替。
+
+只有云平台不把 1:1 NAT/EIP 显示为本机 `scope global` 地址时，才可在人工核对绑定关系、
+NAT 转发和服务器外部 TCP/80 探针后显式加入 `--allow-unbound-public-ip`。该开关会输出醒目警告，
+不会自动证明 NAT/EIP 配置正确，也不得用来绕过拼写不一致。
+
 ## 3. 首次一键部署
 
 ### 3.1 获取服务器代码到 `/data`
@@ -116,6 +125,8 @@ sudo bash deploy/el9/deploy-from-data.sh \
 - 只允许干净工作树。
 
 如果已在 SSH 会话中人工审核并更新代码，可加 `--skip-update`。
+仅对已按上文验证的 1:1 NAT/EIP，可再加 `--allow-unbound-public-ip`；
+`deploy-from-data.sh` 会原样传给底层部署器。
 
 ### 3.3 直接执行底层部署器
 
@@ -136,10 +147,10 @@ sudo bash deploy/el9/one-click-deploy.sh \
 
 脚本会自动完成：
 
-1. 校验 EL9、IPv4、端口、源码，并反向计算签名私钥的公钥，确认它与仓库跟踪的公开清单一致；
+1. 校验 EL9、IPv4、端口和源码，并在任何主机写操作之前确认公网 IP 精确存在于本机 `scope global` 列表；随后反向计算签名私钥的公钥，确认它与仓库跟踪的公开清单一致；
 2. 安装 Nginx、SQLite、Python 3.11、firewalld、SELinux 工具和项目专属 Certbot 环境；
 3. 创建 `wkm-license` 无登录系统账号；
-4. 在唯一的活动 firewalld zone 中精确增加规则（不全量 reload），配置 SELinux 和专属 ACME webroot；
+4. 在唯一的活动 firewalld zone 中精确增加规则（不全量 reload），配置 SELinux 和专属 ACME webroot；SELinux 为 Disabled 时完全跳过 `semanage`/`getsebool`/`setsebool`，为 Enforcing 或 Permissive 时先只读整张端口类型表，确认端口未分配才新增；已属于非 `http_port_t` 类型则失败关闭；
 5. 申请包含 `104.224.90.172` IP SAN 的受信任短期证书；
 6. 安装每四小时运行、只续期本 IP 证书的专属定时器；
 7. 创建不可变候选 release 源码目录；

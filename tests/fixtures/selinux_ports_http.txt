@@ -1,0 +1,4 @@
+SELinux Port Type              Proto    Port Number
+dns_port_t                    udp      53
+http_port_t                   tcp      80, 443, 8999-9001
+reserved_port_t               tcp      1-79
