@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS schema_meta (
     value TEXT NOT NULL
 );
 
-INSERT INTO schema_meta(key, value) VALUES ('schema_version', '1')
+INSERT INTO schema_meta(key, value) VALUES ('schema_version', '2')
 ON CONFLICT(key) DO UPDATE SET value = excluded.value;
 
 CREATE TABLE IF NOT EXISTS customers (
@@ -71,6 +71,20 @@ CREATE TABLE IF NOT EXISTS devices (
     UNIQUE(entitlement_id, install_id)
 );
 
+CREATE TABLE IF NOT EXISTS refresh_sessions (
+    id TEXT PRIMARY KEY,
+    device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL CHECK (status IN ('active', 'rotated', 'revoked', 'expired')),
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    last_used_at TEXT,
+    rotated_at TEXT,
+    revoked_at TEXT,
+    client_version TEXT NOT NULL DEFAULT '',
+    platform TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS audit_events (
     id INTEGER PRIMARY KEY,
     actor_type TEXT NOT NULL,
@@ -86,7 +100,9 @@ CREATE INDEX IF NOT EXISTS idx_entitlements_customer
     ON entitlements(customer_id, status);
 CREATE INDEX IF NOT EXISTS idx_devices_entitlement
     ON devices(entitlement_id, status);
+CREATE INDEX IF NOT EXISTS idx_refresh_sessions_device
+    ON refresh_sessions(device_id, status, expires_at);
 CREATE INDEX IF NOT EXISTS idx_audit_subject
     ON audit_events(subject_type, subject_id, created_at);
 
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;

@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wechat-memory-license-server"
+version = "0.1.0"
+description = "WeChatMemory commercial license API"
+requires-python = ">=3.11"
+dependencies = [
+  "Flask>=3.1,<4",
+  "waitress>=3,<4",
+  "cryptography>=44,<47",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+
+[tool.setuptools]
+packages = ["license_server"]

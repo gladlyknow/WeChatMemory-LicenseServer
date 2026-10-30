@@ -1,5 +1,3 @@
-# Web/API 实现完成后再安装和启用此模板。
-# 运行入口约定为：python -m license_server
 [Unit]
 Description=WeChat Memory License API
 After=network-online.target
@@ -12,7 +10,7 @@ User=wkm-license
 Group=wkm-license
 WorkingDirectory=/opt/wechat-memory-license/current
 EnvironmentFile=/etc/wechat-memory-license/service.env
-ExecStart=/opt/wechat-memory-license/venv/bin/python -m license_server --host 127.0.0.1 --port 9100
+ExecStart=/opt/wechat-memory-license/venv/bin/python -m license_server --host 127.0.0.1 --port 9100 --threads 6
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30s

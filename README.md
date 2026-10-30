@@ -1,7 +1,7 @@
 # WeChatMemory License Server
 
-闭源商业版微信知识库的独立云端授权服务仓库。当前首个交付只包含 SQLite3 schema 和管理员新用户
-注册脚本，不包含聊天记录处理代码，也不依赖 `WeChatMsg-4x`。
+闭源商业版微信知识库的独立云端授权服务仓库。当前交付包含 SQLite3 schema、管理员新用户注册脚本、
+激活/刷新/吊销 API、Ed25519 权益票据和 EL9 部署素材。不包含聊天记录处理代码，也不依赖 `WeChatMsg-4x`。
 
 ## 安全边界
 
@@ -10,7 +10,7 @@
 - 用户存在性不等于身份认证，激活时必须同时提供脚本生成的高熵激活码；
 - 激活码只显示一次，SQLite3 只保存 SHA-256 摘要；
 - 支付、退款和发票不在当前范围；
-- Ed25519 签名私钥后续只能放入 KMS/HSM，不能写入 SQLite3。
+- Ed25519 签名私钥只能位于服务器受限文件或 KMS/HSM，不能写入 SQLite3、Git 或日志。
 
 ## 计划部署入口
 
@@ -24,6 +24,8 @@
 绑定专用域名，以简化未来迁移；当前已确定采用 Enterprise Linux 9 人工部署及受信任的 IP 短期
 证书。逐条部署手册见
 [`docs/MANUAL_DEPLOY_EL9_IP_CERT.md`](docs/MANUAL_DEPLOY_EL9_IP_CERT.md)。
+整体原理、数据模型、API、激活序列和运维边界见
+[`docs/LICENSE_SERVER_ARCHITECTURE.md`](docs/LICENSE_SERVER_ARCHITECTURE.md)。
 
 本仓库是独立商业实现的起点。正式版权声明、EULA 和隐私政策须在权利链审计和法律复核后加入；
 当前不从 GPL 原型仓库复制客户端实现。
@@ -90,6 +92,19 @@ python register_user.py add --db ./data/license.sqlite3 \
 ```bash
 python -m unittest discover -s tests -v
 ```
+
+## 本地 API 启动（仅开发）
+
+```bash
+python -m license_server generate-key --output ./.secrets/dev.pem --key-id dev-1
+export DATABASE_PATH="$PWD/data/license.sqlite3"
+export SIGNING_PRIVATE_KEY_PATH="$PWD/.secrets/dev.pem"
+export SIGNING_KEY_ID=dev-1
+python register_user.py init --db "$DATABASE_PATH"
+python -m license_server --host 127.0.0.1 --port 9100
+```
+
+生产不使用 Flask 开发服务器，模块入口使用 Waitress。对公网的 TLS 只由 Nginx 终止。
 
 ## 当前套餐基线
 

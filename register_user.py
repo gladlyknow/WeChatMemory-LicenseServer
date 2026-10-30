@@ -35,7 +35,9 @@ PLAN_SEEDS = {
         "device_limit": 1,
         "offline_grace_days": 30,
         "upgrade_days": None,
-        "features": ["read_only", "manual_sync", "single_session_export"],
+        "features": [
+            "read_only", "manual_sync", "single_session_export", "settings_write",
+        ],
     },
     "permanent_personal": {
         "name": "永久个人版",
@@ -46,6 +48,7 @@ PLAN_SEEDS = {
         "features": [
             "read_only", "manual_sync", "realtime_sync", "single_account",
             "single_session_export", "classified_export", "standard_analytics",
+            "settings_write",
         ],
     },
     "pro_subscription": {
@@ -57,7 +60,7 @@ PLAN_SEEDS = {
         "features": [
             "read_only", "manual_sync", "realtime_sync", "multi_account",
             "single_session_export", "classified_export", "batch_export",
-            "advanced_analytics",
+            "advanced_analytics", "settings_write",
         ],
     },
 }
@@ -112,7 +115,11 @@ def seed_plans(con: sqlite3.Connection, now: str) -> None:
             "INSERT INTO plans(id,name,billing_kind,device_limit,offline_grace_days,"
             "upgrade_days,features_json,active,created_at,updated_at) "
             "VALUES(?,?,?,?,?,?,?,1,?,?) "
-            "ON CONFLICT(id) DO NOTHING",
+            "ON CONFLICT(id) DO UPDATE SET name=excluded.name,"
+            "billing_kind=excluded.billing_kind,device_limit=excluded.device_limit,"
+            "offline_grace_days=excluded.offline_grace_days,"
+            "upgrade_days=excluded.upgrade_days,features_json=excluded.features_json,"
+            "active=excluded.active,updated_at=excluded.updated_at",
             (plan_id, plan["name"], plan["billing_kind"], plan["device_limit"],
              plan["offline_grace_days"], plan["upgrade_days"], features_json, now, now),
         )
@@ -137,7 +144,7 @@ def initialize_database(db_path: Path) -> dict:
     finally:
         con.close()
     harden_file(db_path)
-    return {"database": str(db_path.resolve()), "schema_version": 1,
+    return {"database": str(db_path.resolve()), "schema_version": 2,
             "journal_mode": "wal", "plans": list(PLAN_IDS)}
 
 
@@ -148,7 +155,7 @@ def ensure_schema(con: sqlite3.Connection) -> None:
         ).fetchone()
     except sqlite3.OperationalError as exc:
         raise RegistrationError("数据库尚未初始化，请先运行 init") from exc
-    if not version or version[0] != "1":
+    if not version or version[0] != "2":
         raise RegistrationError("不支持的数据库 schema 版本")
 
 

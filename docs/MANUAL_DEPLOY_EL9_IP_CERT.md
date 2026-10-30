@@ -3,7 +3,7 @@
 > 目标服务器：`104.224.90.172`  
 > 公网入口：`https://104.224.90.172:9000`  
 > 适用范围：RHEL 9、Rocky Linux 9、AlmaLinux 9、Oracle Linux 9、CentOS Stream 9  
-> 状态：可执行的基础设施手册；授权 Web/API 代码尚未完成，因此当前不能启用应用服务
+> 状态：可执行的手工部署手册；授权 API 已实现，尚需在目标服务器执行本手册
 
 ## 1. 已确定的部署基线
 
@@ -202,23 +202,69 @@ sudo openssl x509 -in /etc/letsencrypt/live/104.224.90.172/cert.pem \
 
 ## 9. 部署授权应用和 SQLite3
 
-当前仓库只有数据库 schema 与管理员注册工具，授权 Web/API 仍待实现。API 完成后应满足以下启动
-契约，再安装 `deploy/el9/wechat-memory-license.service.example`：
+### 9.1 从 GitHub 取得发布源码
 
-- 模块入口：`python -m license_server --host 127.0.0.1 --port 9100`；
-- 健康检查：`GET /healthz`；
-- 环境文件：`/etc/wechat-memory-license/service.env`，权限 `0640 root:wkm-license`；
-- 数据库：`/var/lib/wechat-memory-license/license.sqlite3`，权限 `0600 wkm-license:wkm-license`；
-- 不以 root 运行，不直接监听 9000；
-- 日志不得记录激活码、Authorization、Cookie、设备完整摘要或任何聊天内容。
-
-数据库最低兼容 SQLite 3.34.1，与 EL9 系统 SQLite 对齐。初始化和创建管理员下发用户：
+在服务器上使用仅有该仓库读权限的部署凭据。闭源仓库不要使用个人全权 GitHub token：
 
 ```bash
-sudo -u wkm-license /opt/wechat-memory-license/venv/bin/python \
-  /opt/wechat-memory-license/current/register_user.py init \
-  --db /var/lib/wechat-memory-license/license.sqlite3
+sudo install -d -o root -g root -m 0700 /root/releases
+sudo git clone --depth 1 \
+  https://github.com/gladlyknow/WeChatMemory-LicenseServer.git \
+  /root/releases/WeChatMemory-LicenseServer
+cd /root/releases/WeChatMemory-LicenseServer
+git rev-parse --short HEAD
+```
 
+正式部署建议按已复核的 tag/提交号 checkout，不要在服务器盲目跟随不固定的开发分支。
+
+### 9.2 首次部署生产签名私钥
+
+客户端 `0.3.0` 内置的候选生产公钥必须与服务器私钥一致。将开发端忽略目录中的
+`.secrets/signing-ed25519.pem` 通过受控通道上传为 `/root/wkm-signing-ed25519.pem`，不能经过 Git、聊天工具或工单传输。
+
+在服务器核对权限：
+
+```bash
+sudo chown root:root /root/wkm-signing-ed25519.pem
+sudo chmod 0600 /root/wkm-signing-ed25519.pem
+```
+
+首次执行一键安装：
+
+```bash
+sudo bash deploy/el9/install-release.sh \
+  "$PWD" /root/wkm-signing-ed25519.pem 2026-10-30
+```
+
+脚本会：
+
+1. 创建 `wkm-license` 用户和受限目录；
+2. 复制不可变 release，建立 Python 3.11 虚拟环境并安装 Waitress/Flask/cryptography；
+3. 把私钥安装到 `/etc/wechat-memory-license/signing-ed25519.pem`；
+4. 创建 `service.env`，初始化 SQLite schema v2 和套餐；
+5. 安装 systemd unit，原子切换 `current`，启动后检查 `/readyz`；
+6. 升级时使用 SQLite `.backup` 创建并校验完整备份。
+
+私钥安装成功后，从 `/root` 清理临时上传副本前，先确认
+`/etc/wechat-memory-license/signing-ed25519.pem` 可用且权限为 `0640 root:wkm-license`。
+
+### 9.3 验证进程和 SQLite
+
+```bash
+sudo systemctl status wechat-memory-license --no-pager
+sudo journalctl -u wechat-memory-license -n 100 --no-pager
+curl --fail --silent http://127.0.0.1:9100/healthz
+curl --fail --silent http://127.0.0.1:9100/readyz
+curl --fail --silent http://127.0.0.1:9100/v1/keys
+sudo -u wkm-license sqlite3 /var/lib/wechat-memory-license/license.sqlite3 \
+  'PRAGMA integrity_check; PRAGMA user_version;'
+```
+
+数据库最低兼容 SQLite 3.34.1，与 EL9 系统 SQLite 对齐。
+
+### 9.4 创建首个客户端用户
+
+```bash
 sudo -u wkm-license /opt/wechat-memory-license/venv/bin/python \
   /opt/wechat-memory-license/current/register_user.py add \
   --db /var/lib/wechat-memory-license/license.sqlite3 \
@@ -226,6 +272,16 @@ sudo -u wkm-license /opt/wechat-memory-license/venv/bin/python \
 ```
 
 激活码只显示一次。不得把终端输出写入工单、Shell 历史采集、普通日志或 CI 日志。
+
+### 9.5 启用 Nginx 后做公网验证
+
+```bash
+curl --fail --silent --show-error https://104.224.90.172:9000/healthz
+curl --fail --silent --show-error https://104.224.90.172:9000/readyz
+curl --fail --silent --show-error https://104.224.90.172:9000/v1/keys
+```
+
+`/v1/keys` 返回的 `key_id` 应为 `2026-10-30`，`public_key` 应与客户端内置值完全相同。
 
 ## 10. 手工发布与回滚顺序
 

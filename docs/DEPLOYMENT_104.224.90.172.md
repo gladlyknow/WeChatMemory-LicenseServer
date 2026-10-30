@@ -1,6 +1,6 @@
 # 104.224.90.172 云端授权服务部署设计
 
-> 状态：部署规格；授权 Web/API 尚未实现和部署  
+> 状态：授权 Web/API 已实现；等待在目标服务器手工部署
 > 公网入口：`https://104.224.90.172:9000`
 > 已确定：Enterprise Linux 9 系列、人工部署、Let's Encrypt IP 短期证书
 
@@ -86,25 +86,24 @@ header。反向代理访问日志必须过滤 Authorization、Cookie、激活码
 4. 权限变化通过本地 capability gate 生效；
 5. 客户端关闭后不做后台心跳，与聊天实时同步的生命周期一致。
 
-建议响应内容：
+当前响应为结构化 JSON，核心字段如下：
 
 ```json
 {
   "server_time": "2026-10-17T12:00:00Z",
-  "entitlement_status": "active",
-  "plan": "pro_subscription",
-  "features": ["realtime_sync", "multi_account", "batch_export"],
-  "device_id": "dev_...",
-  "device_limit": 3,
   "refresh_after": "2026-10-17T18:00:00Z",
-  "offline_until": "2026-11-16T12:00:00Z",
-  "license_ticket": "base64url(payload).base64url(signature)",
-  "key_id": "2026-01"
+  "refresh_token": "wkmr_...",
+  "ticket": {
+    "plan": "pro_subscription",
+    "capabilities": ["realtime_sync", "multi_account", "batch_export"],
+    "offline_until": "2026-11-16T12:00:00Z",
+    "key_id": "2026-10-30",
+    "signature": "base64url-ed25519-signature"
+  }
 }
 ```
 
-`license_ticket` 必须覆盖 payload 全部字段并使用 Ed25519 签名。客户端不能只相信普通 JSON 中的
-`features`，必须验证签名票据、`audience`、`issuer`、`device_id`、`not_before`、`expires_at` 和
+`ticket.signature` 覆盖 ticket 全部其他字段。客户端必须验证签名票据、`audience`、`issuer`、`install_id`、`not_before`、`expires_at` 和
 `key_id`。
 
 ### 4.3 服务不可用或授权到期
@@ -125,14 +124,12 @@ POST /v1/activate
 POST /v1/licenses/refresh
 GET  /v1/licenses/status
 POST /v1/devices/deactivate
-POST /v1/devices/unbind-request
 GET  /v1/time
 GET  /v1/keys                         # 只返回公钥与轮换元数据
-GET  /admin                           # 管理 Web，必须独立管理员认证和 MFA
 ```
 
-所有状态改变请求使用 `request_id` 幂等键、服务端时间窗口和 nonce，限制请求体大小并实施按 IP、用户、
-激活码前缀和设备的组合限流。连续失败不会透露“用户名存在但激活码错误”还是“用户不存在”。
+当前实现限制 16 KiB 请求体，实施按 IP 滑动窗口限流，refresh token 每次成功使用都原子轮换。
+连续失败不会透露“用户名存在但激活码错误”还是“用户不存在”。后续多实例部署时需将内存限流迁移到共享后端。
 
 ## 6. SQLite3 运行要求
 
@@ -145,14 +142,13 @@ GET  /admin                           # 管理 Web，必须独立管理员认证
 - 监控磁盘空间、WAL 大小、checkpoint、写锁等待、API P95 和错误率；
 - 达到多主或高并发写需求时迁移数据库，不共享 SQLite 文件。
 
-## 7. 上线前仍需提供
+## 7. 上线前仍需确认
 
 - EL9 的具体发行版与小版本；
 - SSH 管理来源 IP/VPN；
-- KMS/HSM 提供商；
+- 签名私钥何时从受限文件迁移到 KMS/HSM；
 - 备份目标与保留周期；
 - 管理员初始账号和 MFA 方式；
 - 最终隐私政策、EULA 和数据保留期限。
 
-基础设施手册可先执行到证书和反向代理验证；授权 API、签名密钥和剩余安全信息齐备前不能正式
-对公网提供激活服务。
+授权 API 已完成，但在证书、签名私钥、备份和监控全部验收前不能标记为正式生产服务。
