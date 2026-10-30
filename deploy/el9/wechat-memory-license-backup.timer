@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily WeChat Memory license database backup
+
+[Timer]
+OnCalendar=*-*-* 03:15:00 UTC
+RandomizedDelaySec=20min
+Persistent=true
+Unit=wechat-memory-license-backup.service
+
+[Install]
+WantedBy=timers.target

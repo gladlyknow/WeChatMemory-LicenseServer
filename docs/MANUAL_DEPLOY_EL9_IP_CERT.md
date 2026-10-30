@@ -5,6 +5,10 @@
 > 适用范围：RHEL 9、Rocky Linux 9、AlmaLinux 9、Oracle Linux 9、CentOS Stream 9  
 > 状态：可执行的手工部署手册；授权 API 已实现，尚需在目标服务器执行本手册
 
+如果希望自动完成依赖、防火墙、SELinux、证书、应用、备份和验收，直接使用
+[`ONE_CLICK_DEPLOY_AND_ADMIN.md`](ONE_CLICK_DEPLOY_AND_ADMIN.md) 中的
+`deploy/el9/one-click-deploy.sh`。本文保留逐步手工排错流程。
+
 ## 1. 已确定的部署基线
 
 - 人工登录服务器部署，不使用 Docker、Kubernetes 或自动发布平台；

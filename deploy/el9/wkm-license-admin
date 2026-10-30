@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ ${EUID} -ne 0 ]]; then
+  echo "请通过 sudo 或 root 执行 wkm-license-admin。" >&2
+  exit 2
+fi
+
+PYTHON=/opt/wechat-memory-license/venv/bin/python
+ADMIN=/opt/wechat-memory-license/current/license_admin.py
+DATABASE=/var/lib/wechat-memory-license/license.sqlite3
+ACTOR="${SUDO_USER:-root}"
+
+if [[ ! -x "${PYTHON}" || ! -f "${ADMIN}" || ! -f "${DATABASE}" ]]; then
+  echo "授权服务尚未完整安装。" >&2
+  exit 3
+fi
+
+exec /usr/sbin/runuser -u wkm-license -- \
+  /usr/bin/env WKM_ADMIN_ACTOR="${ACTOR}" \
+  "${PYTHON}" "${ADMIN}" --db "${DATABASE}" "$@"

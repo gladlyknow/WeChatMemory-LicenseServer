@@ -26,6 +26,8 @@
 [`docs/MANUAL_DEPLOY_EL9_IP_CERT.md`](docs/MANUAL_DEPLOY_EL9_IP_CERT.md)。
 整体原理、数据模型、API、激活序列和运维边界见
 [`docs/LICENSE_SERVER_ARCHITECTURE.md`](docs/LICENSE_SERVER_ARCHITECTURE.md)。
+一键部署、升级、新增用户、套餐调整、续期、停用、激活码重置、设备解绑和备份恢复见
+[`docs/ONE_CLICK_DEPLOY_AND_ADMIN.md`](docs/ONE_CLICK_DEPLOY_AND_ADMIN.md)。
 
 本仓库是独立商业实现的起点。正式版权声明、EULA 和隐私政策须在权利链审计和法律复核后加入；
 当前不从 GPL 原型仓库复制客户端实现。
@@ -40,6 +42,15 @@ python register_user.py init --db ./data/license.sqlite3
 设为 `0600`。
 
 ## 注册用户
+
+生产服务器部署后优先使用固定入口：
+
+```bash
+sudo wkm-license-admin add --username demo-user --plan free
+```
+
+完整管理员命令见一键部署与授权运维手册。以下 `register_user.py` 方式主要用于开发环境和首次数据库
+测试。
 
 免费版：
 
@@ -91,6 +102,12 @@ python register_user.py add --db ./data/license.sqlite3 \
 
 ```bash
 python -m unittest discover -s tests -v
+```
+
+Shell 脚本静态校验：
+
+```bash
+bash -n deploy/el9/*.sh deploy/el9/wkm-license-admin
 ```
 
 ## 本地 API 启动（仅开发）

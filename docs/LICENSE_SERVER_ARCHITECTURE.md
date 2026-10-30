@@ -1,6 +1,6 @@
 # WeChatMemory 授权服务原理、接口与运维设计
 
-> 基线：License Server `0.1.0` / Client `0.3.0`
+> 基线：License Server `0.2.0` / Client `0.3.0`
 > 公网入口：`https://104.224.90.172:9000`
 > 存储：单机 SQLite3，客户聊天数据不上云。
 

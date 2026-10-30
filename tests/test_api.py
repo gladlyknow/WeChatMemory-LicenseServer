@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from license_server.app import create_app
 from license_server.signing import TicketSigner
+from license_admin import set_entitlement_status, set_plan
 from register_user import initialize_database, register_user
 
 
@@ -116,6 +117,43 @@ class LicenseApiTests(unittest.TestCase):
             headers={"Authorization": f"Bearer {body['refresh_token']}"},
         )
         self.assertEqual(status.status_code, 401)
+
+    def test_admin_changes_are_visible_on_the_next_client_refresh(self) -> None:
+        activated = self.client.post("/v1/activate", json=self.payload()).get_json()
+        set_plan(
+            self.database,
+            "commercial-user",
+            "pro_subscription",
+            30,
+            device_limit=4,
+            offline_days=10,
+        )
+        upgraded = self.client.post(
+            "/v1/licenses/refresh",
+            json={
+                "refresh_token": activated["refresh_token"],
+                "install_id": self.install_id,
+                "device_hash": self.device_hash,
+                "platform": "windows-amd64",
+                "app_version": "0.3.0",
+            },
+        ).get_json()
+        self.assertEqual(upgraded["ticket"]["plan"], "pro_subscription")
+        self.assertIn("advanced_analytics", upgraded["ticket"]["capabilities"])
+
+        set_entitlement_status(self.database, "commercial-user", "suspended")
+        read_only = self.client.post(
+            "/v1/licenses/refresh",
+            json={
+                "refresh_token": upgraded["refresh_token"],
+                "install_id": self.install_id,
+                "device_hash": self.device_hash,
+                "platform": "windows-amd64",
+                "app_version": "0.3.0",
+            },
+        )
+        self.assertEqual(read_only.status_code, 200)
+        self.assertEqual(read_only.get_json()["ticket"]["capabilities"], ["read_only"])
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ fi
 SOURCE_DIR="${1:-}"
 STAGED_KEY="${2:-}"
 KEY_ID="${3:-2026-10-30}"
+PUBLIC_BASE_URL="${WKM_PUBLIC_BASE_URL:-https://104.224.90.172:9000}"
 if [[ -z "${SOURCE_DIR}" || ! -f "${SOURCE_DIR}/pyproject.toml" ]]; then
   echo "用法：$0 <已上传的源码目录> [首次部署的 Ed25519 PEM] [key-id]" >&2
   exit 2
@@ -51,8 +52,10 @@ if [[ -f "${DATABASE_PATH}" ]]; then
     exit 3
   fi
   BACKUP_PATH="${STATE_ROOT}/backups/license-${RELEASE_ID}.sqlite3"
-  sudo -u wkm-license sqlite3 "${DATABASE_PATH}" ".backup '${BACKUP_PATH}'"
-  if [[ "$(sudo -u wkm-license sqlite3 "${BACKUP_PATH}" 'PRAGMA integrity_check;')" != "ok" ]]; then
+  /usr/sbin/runuser -u wkm-license -- /usr/bin/sqlite3 \
+    "${DATABASE_PATH}" ".backup '${BACKUP_PATH}'"
+  if [[ "$(/usr/sbin/runuser -u wkm-license -- /usr/bin/sqlite3 \
+    "${BACKUP_PATH}" 'PRAGMA integrity_check;')" != "ok" ]]; then
     echo "升级前 SQLite 备份完整性检查失败。" >&2
     exit 3
   fi
@@ -71,7 +74,7 @@ fi
 ENV_PATH="${CONFIG_ROOT}/service.env"
 if [[ ! -f "${ENV_PATH}" ]]; then
   cat >"${ENV_PATH}" <<EOF
-PUBLIC_BASE_URL=https://104.224.90.172:9000
+PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
 APP_BIND=127.0.0.1
 APP_PORT=9100
 DATABASE_PATH=${STATE_ROOT}/license.sqlite3
@@ -87,12 +90,24 @@ EOF
   chmod 0640 "${ENV_PATH}"
 fi
 
-sudo -u wkm-license "${APP_ROOT}/venv/bin/python" \
+/usr/sbin/runuser -u wkm-license -- "${APP_ROOT}/venv/bin/python" \
   "${RELEASE_DIR}/register_user.py" init --db "${DATABASE_PATH}"
 
 install -o root -g root -m 0644 \
   "${RELEASE_DIR}/deploy/el9/wechat-memory-license.service.example" \
   /etc/systemd/system/wechat-memory-license.service
+install -o root -g root -m 0755 \
+  "${RELEASE_DIR}/deploy/el9/wkm-license-admin" \
+  /usr/local/sbin/wkm-license-admin
+install -o root -g root -m 0755 \
+  "${RELEASE_DIR}/deploy/el9/backup-database.sh" \
+  /usr/local/sbin/wkm-license-backup
+install -o root -g root -m 0644 \
+  "${RELEASE_DIR}/deploy/el9/wechat-memory-license-backup.service" \
+  /etc/systemd/system/wechat-memory-license-backup.service
+install -o root -g root -m 0644 \
+  "${RELEASE_DIR}/deploy/el9/wechat-memory-license-backup.timer" \
+  /etc/systemd/system/wechat-memory-license-backup.timer
 
 if [[ -L "${CURRENT_LINK}" ]]; then
   PREVIOUS_TARGET="$(readlink -f "${CURRENT_LINK}")"
@@ -101,6 +116,7 @@ ln -sfn "${RELEASE_DIR}" "${CURRENT_LINK}.next"
 mv -Tf "${CURRENT_LINK}.next" "${CURRENT_LINK}"
 systemctl daemon-reload
 systemctl enable --now wechat-memory-license
+systemctl enable --now wechat-memory-license-backup.timer
 if ! curl --fail --silent --show-error http://127.0.0.1:9100/readyz >/dev/null; then
   if [[ -n "${PREVIOUS_TARGET}" ]]; then
     ln -sfn "${PREVIOUS_TARGET}" "${CURRENT_LINK}.rollback"

@@ -1,0 +1,15 @@
+[Unit]
+Description=Back up the WeChat Memory license database
+After=wechat-memory-license.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/wkm-license-backup
+UMask=0077
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/wechat-memory-license
