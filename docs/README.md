@@ -9,7 +9,7 @@
 |---|---|
 | 服务器 | Enterprise Linux 9 |
 | 源码目录 | `/data/WeChatMemory-LicenseServer` |
-| 公网入口 | `https://104.224.90.172:9000` |
+| 公网入口 | `https://104.244.90.172:9000` |
 | 内部应用 | `http://127.0.0.1:9100` |
 | 证书通知邮箱 | `gladlygrady@tutamail.com` |
 | 数据库 | 本机 SQLite3 WAL |
@@ -28,7 +28,7 @@
 | 生成或轮换签名密钥 | [签名密钥运维](SIGNING_KEY_OPERATIONS.md) | 公钥清单、备份、恢复、客户端先行轮换 |
 | 发布审计与签字 | [授权服务验收标准](ACCEPTANCE_CRITERIA.md) | P0/P1/P2、授权不变量、回滚、法务与未通过循环 |
 | 商业法务与依赖来源 | [法务与 SBOM 发布门禁](LEGAL_AND_SBOM_RELEASE_GATE.md) | proprietary 基线、第三方 notice、精确依赖 SPDX 和人工法律签字 |
-| 审查固定 IP 部署决策 | [104.224.90.172 部署设计](DEPLOYMENT_104.224.90.172.md) | 网络、TLS、客户端权限语义 |
+| 审查固定 IP 部署决策 | [104.244.90.172 部署设计](DEPLOYMENT_104.244.90.172.md) | 网络、TLS、客户端权限语义 |
 | 修改文档或发布契约 | [文档随代码发布规则](DOCUMENTATION_POLICY.md) | 必修场景、校验命令和评审清单 |
 
 ## 文档权威顺序

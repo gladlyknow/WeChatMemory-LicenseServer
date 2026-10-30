@@ -14,14 +14,14 @@
 
 ## 当前生产部署基线
 
-- 服务端：`0.2.3`，SQLite schema `3`
-- 服务器：`104.224.90.172`
-- 公网 Web/API：`https://104.224.90.172:9000`
+- 服务端：`0.2.4`，SQLite schema `3`
+- 服务器：`104.244.90.172`
+- 公网 Web/API：`https://104.244.90.172:9000`
 - 内部应用：`127.0.0.1:9100`，不对公网开放
 - SQLite3：服务器本机持久磁盘，只允许内部应用进程访问
 
 9000 必须使用 HTTPS，不能用明文 HTTP。详细拓扑、安全规则和客户端权限刷新协议见
-[`docs/DEPLOYMENT_104.224.90.172.md`](docs/DEPLOYMENT_104.224.90.172.md)。正式生产仍推荐为该 IP
+[`docs/DEPLOYMENT_104.244.90.172.md`](docs/DEPLOYMENT_104.244.90.172.md)。正式生产仍推荐为该 IP
 绑定专用域名，以简化未来迁移；当前已确定采用 Enterprise Linux 9 人工部署及受信任的 IP 短期
 证书。逐条部署手册见
 [`docs/MANUAL_DEPLOY_EL9_IP_CERT.md`](docs/MANUAL_DEPLOY_EL9_IP_CERT.md)。
@@ -40,6 +40,11 @@ proprietary 工程许可基线、第三方依赖来源、离线 SPDX 生成和�
 [`docs/SIGNING_KEY_OPERATIONS.md`](docs/SIGNING_KEY_OPERATIONS.md)。
 目标服务器的标准源码目录是 `/data/WeChatMemory-LicenseServer`，可从该目录执行
 `deploy/el9/deploy-from-data.sh`；证书通知邮箱默认为 `gladlygrady@tutamail.com`。
+若首次从已停用的 `entity-echo.com` 接管 `104.244.90.172` 时冲突文件仍存在，必须显式传入
+`--retire-nginx-conf /etc/nginx/conf.d/entityecho.conf`。它会在移出 active `conf.d` 前创建事务快照，
+失败时恢复原字节和 Nginx 运行态，成功时在 `/etc/wechat-memory-license/retired-nginx/`
+保留可恢复副本与记录。当前服务器上该文件已由管理员删除，现行命令不传此参数。
+此参数最多只用一次，普通升级不得重复传入。
 
 本仓库是独立商业实现的起点。根 `LICENSE` 是 proprietary 工程发布基线，不代表法律已批准。
 客户 EULA、隐私政策和属地商业条款仍须在权利链审计和人工法律复核后定稿；当前不从 GPL 原型仓库

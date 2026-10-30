@@ -264,7 +264,7 @@ class DeploymentTransactionTests(unittest.TestCase):
         self.assertIn("wkm_selinux_types_for_tcp_port", selinux_safety)
         self.assertNotIn("semanage port -m", selinux_safety)
         self.assertNotIn("for (index =", selinux_safety)
-        self.assertIn("--cert-name 104.224.90.172", service)
+        self.assertIn("--cert-name 104.244.90.172", service)
         self.assertIn("/opt/wechat-memory-license-certbot/bin/certbot", service)
         self.assertIn("ReadWritePaths=/etc/letsencrypt", service)
         self.assertIn("Unit=wechat-memory-certbot-renew.service", timer)
@@ -277,6 +277,104 @@ class DeploymentTransactionTests(unittest.TestCase):
         )
         self.assertIn("本机成功、外部仍是 `connection refused`", manual)
         self.assertIn("外部探针未成功时禁止运行正式 Certbot", one_click)
+
+    def test_explicit_nginx_retirement_is_transactional_and_one_time(self) -> None:
+        script = (ROOT / "deploy/el9/one-click-deploy.sh").read_text(
+            encoding="utf-8"
+        )
+        wrapper = (ROOT / "deploy/el9/deploy-from-data.sh").read_text(
+            encoding="utf-8"
+        )
+        helper = (ROOT / "deploy/el9/shared-host-safety.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("--retire-nginx-conf", wrapper)
+        self.assertIn(
+            'arguments+=(--retire-nginx-conf "${RETIRE_NGINX_CONF}")', wrapper
+        )
+        self.assertIn("--retire-nginx-conf", script)
+        validation = script.index("wkm_validate_retire_nginx_conf")
+        dnf_install = script.index("dnf install -y")
+        trap_install = script.index("trap on_deploy_exit EXIT")
+        pre_digest = script.index('NGINX_FOREIGN_PRE_RETIRE_BASELINE="$(')
+        retirement = script.index('wkm_retire_nginx_conf "${APPLICATION_TRANSACTION_DIR}"')
+        checkpoint = script.index("wkm_deploy_checkpoint after_nginx_retirement")
+        conflict = script.index("wkm_assert_no_foreign_nginx_conflict", retirement)
+        firewall = script.index("\nconfigure_firewall\n")
+        finalize = script.index("wkm_finalize_retired_nginx_conf")
+        commit = script.index("DEPLOY_COMPLETED=1")
+
+        self.assertLess(validation, dnf_install)
+        self.assertLess(trap_install, pre_digest)
+        self.assertLess(pre_digest, retirement)
+        self.assertLess(retirement, checkpoint)
+        self.assertLess(checkpoint, conflict)
+        self.assertLess(conflict, firewall)
+        self.assertLess(finalize, commit)
+        for token in (
+            "wkm_tx_capture_file",
+            "WKM_RETIRED_NGINX_SHA256",
+            "wkm_write_retired_nginx_record committed",
+            "wkm_restore_retired_nginx_conf",
+            '[[ -e "${original_path}" || -L "${original_path}" ]]',
+            "未声明目标 IP",
+        ):
+            self.assertIn(token, helper)
+
+    def test_owned_legacy_endpoint_is_rebuilt_not_rejected(self) -> None:
+        script = (ROOT / "deploy/el9/one-click-deploy.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "将已确认归属 WeChatMemory 的旧公网 IP 配置迁移到 ${PUBLIC_IP}",
+            script,
+        )
+        self.assertNotIn(
+            "已有 WeChatMemory Nginx 配置与当前 --public-ip/ACME webroot 不一致",
+            script,
+        )
+        backup = script.index("backup_nginx_config", script.index("ACME_ROUTE_VERIFIED"))
+        install = script.index(
+            'install -o root -g root -m 0644 "${BOOTSTRAP}.tmp" "${BOOTSTRAP}"'
+        )
+        self.assertLess(backup, install)
+
+    def test_signing_key_metadata_is_gated_before_host_mutation(self) -> None:
+        script = (ROOT / "deploy/el9/one-click-deploy.sh").read_text(
+            encoding="utf-8"
+        )
+        installer = (ROOT / "deploy/el9/install-release.sh").read_text(
+            encoding="utf-8"
+        )
+        wrapper = (ROOT / "deploy/el9/deploy-from-data.sh").read_text(
+            encoding="utf-8"
+        )
+        staged_gate = script.index(
+            'wkm_assert_staged_signing_key "${SIGNING_KEY}"'
+        )
+        package_install = script.index("dnf install -y")
+        self.assertLess(staged_gate, package_install)
+        self.assertIn("signing-key-safety.sh", script)
+        self.assertIn(
+            'wkm_assert_staged_signing_key "${STAGED_KEY}"', installer
+        )
+        self.assertLess(
+            installer.index('wkm_assert_staged_signing_key "${STAGED_KEY}"'),
+            installer.index("useradd --system"),
+        )
+        self.assertIn(
+            '[[ -e "${KEY_PATH}" || -L "${KEY_PATH}" ]]', installer
+        )
+        self.assertIn(
+            '[[ -e "${LEGACY_KEY_PATH}" || -L "${LEGACY_KEY_PATH}" ]]',
+            installer,
+        )
+        self.assertGreaterEqual(
+            installer.count('wkm_assert_installed_signing_key "${KEY_PATH}"'), 2
+        )
+        self.assertIn('--signing-key "${SIGNING_KEY}"', wrapper)
+        self.assertNotIn('if [[ -f "${SIGNING_KEY}" ]]', wrapper)
 
 
 if __name__ == "__main__":

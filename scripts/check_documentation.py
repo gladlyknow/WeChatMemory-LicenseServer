@@ -24,9 +24,10 @@ CORE_DOCUMENTS = (
     "docs/ONE_CLICK_DEPLOY_AND_ADMIN.md",
     "docs/MANUAL_DEPLOY_EL9_IP_CERT.md",
     "docs/SIGNING_KEY_OPERATIONS.md",
-    "docs/DEPLOYMENT_104.224.90.172.md",
+    "docs/DEPLOYMENT_104.244.90.172.md",
     "sbom/server-runtime.spdx.json",
     "scripts/generate_sbom.py",
+    "deploy/el9/signing-key-safety.sh",
 )
 BASELINE_DOCUMENTS = (
     "README.md",
@@ -35,7 +36,8 @@ BASELINE_DOCUMENTS = (
     "docs/ONE_CLICK_DEPLOY_AND_ADMIN.md",
 )
 SOURCE_DIRECTORY = "/data/WeChatMemory-LicenseServer"
-PUBLIC_ENDPOINT = "https://104.224.90.172:9000"
+PUBLIC_ENDPOINT = "https://104.244.90.172:9000"
+RETIRED_PUBLIC_IP = "104.224.90.172"
 ADMIN_EMAIL = "gladlygrady@tutamail.com"
 LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
 SHELL_FENCE = re.compile(
@@ -79,6 +81,15 @@ def check_repository(root: Path = ROOT) -> list[str]:
         for relative in CORE_DOCUMENTS:
             if not (ROOT / relative).is_file():
                 errors.append(f"missing core document: {relative}")
+
+        deployment_root = ROOT / "deploy" / "el9"
+        if deployment_root.is_dir():
+            for source in sorted(deployment_root.iterdir()):
+                if source.is_file() and RETIRED_PUBLIC_IP in _read(source, errors):
+                    errors.append(
+                        f"retired public IP remains in production deployment asset: "
+                        f"{source.relative_to(ROOT)}"
+                    )
 
         sbom_path = ROOT / "sbom" / "server-runtime.spdx.json"
         if sbom_path.is_file():
@@ -141,13 +152,13 @@ def check_repository(root: Path = ROOT) -> list[str]:
             "deploy/el9/deploy-from-data.sh": (
                 f'SOURCE_DIR="{SOURCE_DIRECTORY}"',
                 f'ADMIN_EMAIL="{ADMIN_EMAIL}"',
-                'PUBLIC_IP="104.224.90.172"',
+                'PUBLIC_IP="104.244.90.172"',
                 'PUBLIC_PORT="9000"',
             ),
             "deploy/el9/one-click-deploy.sh": (
                 f'SOURCE_DIR="{SOURCE_DIRECTORY}"',
                 f'EMAIL="{ADMIN_EMAIL}"',
-                'PUBLIC_IP="104.224.90.172"',
+                'PUBLIC_IP="104.244.90.172"',
                 'PUBLIC_PORT="9000"',
             ),
         }

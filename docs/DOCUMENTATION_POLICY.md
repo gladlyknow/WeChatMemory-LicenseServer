@@ -1,8 +1,8 @@
 # 跨仓库交付总览与文档治理规范
 
 > 基线日期：2026-10-30
-> 客户端：`WeChatMemory-Client 0.3.3`
-> 授权服务端：`WeChatMemory-LicenseServer 0.2.3`
+> 客户端：`WeChatMemory-Client 0.3.4`
+> 授权服务端：`WeChatMemory-LicenseServer 0.2.4`
 > 授权协议：`v1`；服务端 SQLite schema：`3`；公钥清单 schema：`1`
 
 本文是客户端与授权服务端协同发布的入口。它说明两个仓库的边界、部署顺序、版本与信任根检查，
@@ -42,7 +42,7 @@ flowchart LR
         TRUST["内置 Ed25519 公钥环"] --> LIC["授权客户端"]
     end
 
-    subgraph CLOUD["104.224.90.172：授权控制平面"]
+    subgraph CLOUD["104.244.90.172：授权控制平面"]
         NGINX["Nginx HTTPS :9000"] --> API["Waitress / Flask 127.0.0.1:9100"]
         API --> DB["本机 SQLite schema 3"]
         KEY["受限 Ed25519 私钥"] --> API
@@ -126,7 +126,7 @@ git branch --show-current
 sudo bash deploy/el9/deploy-from-data.sh \
   --signing-key /root/wkm-signing-ed25519.pem \
   --key-id 2026-10-30 \
-  --public-ip 104.224.90.172 \
+  --public-ip 104.244.90.172 \
   --public-port 9000
 ```
 
@@ -143,9 +143,9 @@ sudo systemctl status wechat-memory-license --no-pager
 curl --fail --silent http://127.0.0.1:9100/healthz
 curl --fail --silent http://127.0.0.1:9100/readyz
 curl --fail --silent http://127.0.0.1:9100/readyz/deep
-curl --fail --silent https://104.224.90.172:9000/healthz
-curl --fail --silent https://104.224.90.172:9000/readyz
-curl --fail --silent https://104.224.90.172:9000/v1/keys
+curl --fail --silent https://104.244.90.172:9000/healthz
+curl --fail --silent https://104.244.90.172:9000/readyz
+curl --fail --silent https://104.244.90.172:9000/v1/keys
 ```
 
 不得使用 `curl -k` 掩盖证书问题。当前 `/readyz` 是受限流的廉价探针，只确认 SQLite 可用、
@@ -168,7 +168,7 @@ Windows 10/11 x64 上使用 x64 Python/PowerShell：
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File ".\packaging\windows\build.ps1" `
-  -Version "0.3.3" `
+  -Version "0.3.4" `
   -Edition NativeCandidate
 ```
 
@@ -178,7 +178,7 @@ helper 完整，不应通过降级为开发版规避预检。
 Ubuntu/Linux 构建：
 
 ```bash
-VERSION=0.3.3 ./packaging/linux/build.sh
+VERSION=0.3.4 ./packaging/linux/build.sh
 ```
 
 ### 3.5 跨端最终验收
@@ -192,10 +192,10 @@ VERSION=0.3.3 ./packaging/linux/build.sh
 
 | 层 | 当前基线 | 兼容要求 | 发布状态 |
 |---|---|---|---|
-| 客户端 | `0.3.3` | Windows 10/11 x64；Ubuntu/Linux x86_64 | Windows 为 NativeCandidate，须实机验收 |
+| 客户端 | `0.3.4` | Windows 10/11 x64；Ubuntu/Linux x86_64 | Windows 为 NativeCandidate，须实机验收 |
 | Windows 微信 | 4.x 读取框架 | 取钥门禁目前精确信任腾讯签名的 `Weixin.exe 4.1.0.34` 指定哈希 | 其他版本必须新增证据和门禁，不能默认放行 |
-| 授权服务端 | `0.2.3` | Enterprise Linux 9、Python 3.11、单主 SQLite | 手工部署 |
-| 公网接口 | `/v1/*` | HTTPS `104.224.90.172:9000`；内部 `127.0.0.1:9100` | 禁止 HTTP 降级 |
+| 授权服务端 | `0.2.4` | Enterprise Linux 9、Python 3.11、单主 SQLite | 手工部署 |
+| 公网接口 | `/v1/*` | HTTPS `104.244.90.172:9000`；内部 `127.0.0.1:9100` | 禁止 HTTP 降级 |
 | 授权协议 | `v1` | `issuer=wechat-memory-license`、`audience=wechat-memory-client` | 未知 `key_id` 失败关闭 |
 | 服务端数据库 | schema `3` | 顺序 migration；终态 refresh session 有界清理；部署前后均需备份、廉价 `readyz` 和 loopback `readyz/deep` | SQLite WAL 单主 |
 | 公钥清单 | schema `1` | Ed25519、base64url raw no padding；当前 active key `2026-10-30` | 服务端清单与客户端镜像必须一致 |

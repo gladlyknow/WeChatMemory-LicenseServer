@@ -1,12 +1,17 @@
-# 104.224.90.172 云端授权服务部署设计
+# 104.244.90.172 云端授权服务部署设计
 
 > 状态：授权 Web/API 已实现；等待在目标服务器手工部署
-> 公网入口：`https://104.224.90.172:9000`
+> 公网入口：`https://104.244.90.172:9000`
 > 已确定：Enterprise Linux 9 系列、人工部署、Let's Encrypt IP 短期证书
 > 当前生产命令以 [`SERVER_OPERATIONS_RUNBOOK.md`](SERVER_OPERATIONS_RUNBOOK.md) 为准。
 
 逐条部署命令、Nginx 配置、SELinux、防火墙及续期方案见
 [`MANUAL_DEPLOY_EL9_IP_CERT.md`](MANUAL_DEPLOY_EL9_IP_CERT.md)。
+
+此文档与发行模板已从早期误写的 `104.224.90.172` 迁移到服务器实际绑定的
+`104.244.90.172`。旧地址只作为迁移历史和错误输入回归样本，不得出现在 Certbot、
+Nginx、systemd、默认参数或验收 URL 中。已有的 WeChatMemory 旧 IP bootstrap 文件会先进入
+部署事务快照，再重建为当前 IP；任一后续步骤失败都按字节恢复旧文件与 Nginx 运行态。
 
 ## 1. 拓扑
 
@@ -27,7 +32,7 @@ flowchart LR
 
 任何用户名、激活码、访问令牌或设备令牌都不得通过明文 HTTP 传输。
 
-已经确认使用受信任的 IP 地址短期证书，入口为 `https://104.224.90.172:9000`。证书自动续期并在
+已经确认使用受信任的 IP 地址短期证书，入口为 `https://104.244.90.172:9000`。证书自动续期并在
 剩余 48 小时时报警；正式客户端禁止关闭证书验证、接受自签名证书或自动降级到 HTTP。所选
 HTTP-01 方案还需要开放 `80/tcp`，仅用于 `/.well-known/acme-challenge/`，其他路径返回 404。
 

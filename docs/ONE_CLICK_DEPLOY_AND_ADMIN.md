@@ -1,6 +1,6 @@
 # 授权服务一键部署与用户授权运维手册
 
-> 目标：Enterprise Linux 9，公网 `https://104.224.90.172:9000`
+> 目标：Enterprise Linux 9，公网 `https://104.244.90.172:9000`
 > 架构：Nginx TLS → `127.0.0.1:9100` 授权 API → 本机 SQLite3
 > 适用：首次安装、后续升级、新增用户、套餐调整、续期、停用和设备解绑
 > 文档导航见 [`README.md`](README.md)，值班、完整恢复和回滚见
@@ -27,7 +27,7 @@ flowchart LR
 
 1. 服务器运行 RHEL 9、Rocky Linux 9、AlmaLinux 9、Oracle Linux 9 或 CentOS Stream 9；
 2. 云安全组和服务器都允许公网访问 `80/tcp`、`9000/tcp`；
-3. `104.224.90.172` 直接绑定当前服务器，80 端口没有被其他代理占用；
+3. `104.244.90.172` 直接绑定当前服务器，80 端口没有被其他代理占用；
 4. 已通过 SSH 登录，当前账号具备 `sudo` 权限；
 5. 已准备运维邮箱；
 6. 证书通知与运维邮箱为 `gladlygrady@tutamail.com`；
@@ -41,7 +41,9 @@ flowchart LR
 /root/wkm-signing-ed25519.pem
 ```
 
-该私钥不能进入 Git、聊天软件、工单、普通备份或 Shell 输出。建议先执行：
+该私钥不能进入 Git、聊天软件、工单、普通备份或 Shell 输出。首次源文件必须是非软链接普通文件，
+且元数据精确为 `root:root 0600`。部署器会在安装软件包或修改主机前检查这些元数据，
+不读取或输出 PEM 字节。必须先执行：
 
 ```bash
 sudo chown root:root /root/wkm-signing-ed25519.pem
@@ -54,8 +56,8 @@ sudo chmod 0600 /root/wkm-signing-ed25519.pem
 ```bash
 # 只在保存匹配私钥的 Ubuntu 开发机上执行
 scp WeChatMemory-LicenseServer/.secrets/signing-ed25519.pem \
-  root@104.224.90.172:/root/.wkm-signing-ed25519.upload
-ssh root@104.224.90.172 \
+  root@104.244.90.172:/root/.wkm-signing-ed25519.upload
+ssh root@104.244.90.172 \
   'set -eu; umask 077; trap "rm -f /root/.wkm-signing-ed25519.upload" EXIT; \
    test ! -e /root/wkm-signing-ed25519.pem; \
    openssl pkey -in /root/.wkm-signing-ed25519.upload -check -noout; \
@@ -65,6 +67,11 @@ ssh root@104.224.90.172 \
 
 如果第二步因目标已存在而退出，不要删除或覆盖旧文件；先执行公钥指纹核对。
 暂存 `.upload` 文件会由远程 `trap` 在成功或失败时清理。
+首次校验通过后，发布器将它安装为
+`/etc/wechat-memory-license/signing-ed25519-<key-id>.pem`，运行时元数据固定为
+`root:wkm-license 0640`。升级会重新检查已安装文件，不会把首次源的 `0600` 规则误用到运行文件。
+候选 release 内的验证命令随后只派生公钥并与跟踪的 manifest 精确比对，输出被丢弃；
+任何元数据或公钥不匹配都会失败关闭。
 
 Let's Encrypt 的 IP 地址证书必须使用短期证书配置。Certbot 需要 5.4 或更高版本；本仓库默认固定
 `5.9.0`。一键部署同时校验 `x.y.z` 格式和数值下限，格式正确但低于 `5.4.0` 也会失败关闭。
@@ -75,7 +82,8 @@ Let's Encrypt 的 IP 地址证书必须使用短期证书配置。Certbot 需要
 
 一键部署器会在安装软件、改防火墙、写 Nginx 或调用 Certbot 之前，用
 `ip -o -4 addr show scope global` 读取本机地址，并对 `--public-ip` 执行完全相等匹配。
-例如本机是 `104.244.90.172`，而参数误写成 `104.224.90.172`，脚本会立即失败且不会进入
+例如本机是 `104.244.90.172`，而参数误写成已退役的旧地址
+`104.224.90.172`，脚本会立即失败且不会进入
 Certbot。这是对输入错误和目标主机登录错误的强制门禁，不能用出站 IP 查询代替。
 
 只有云平台不把 1:1 NAT/EIP 显示为本机 `scope global` 地址时，才可在人工核对绑定关系、
@@ -116,11 +124,30 @@ sudo bash deploy/el9/deploy-from-data.sh \
 `public` 只是示例；必须使用公网网卡实际所属 zone。只有一个活动 zone 时可省略该参数；
 检测到多个 zone 时脚本会失败关闭，不会把入站规则批量加到多个网络。
 
+当前服务器的 `entityecho.conf` 已由管理员手工删除，因此上面的现行部署命令 **不带**
+`--retire-nginx-conf`；当文件已不存在时绝对不要传该参数，否则预检会按设计失败关闭。
+只有冲突文件仍存在，且已确认 **整个** `entityecho.conf`
+不再承载任何业务时，才可把下面这一次性显式授权追加到首次命令：
+
+```bash
+sudo bash deploy/el9/deploy-from-data.sh \
+  --signing-key /root/wkm-signing-ed25519.pem \
+  --firewall-zone public \
+  --retire-nginx-conf /etc/nginx/conf.d/entityecho.conf
+```
+
+脚本只接受 `/etc/nginx/conf.d` 下直接存在的普通 `.conf` 文件，拒绝软链接、
+WeChatMemory 自身配置和未声明目标 IP/端口的无关站点。成功后原文件按字节保留到
+`/etc/wechat-memory-license/retired-nginx/retirement.*/`，其中 `RETIREMENT.txt` 记录原路径、
+SHA-256 和替代入口。部署任一步失败会在 Nginx reload 前恢复原文件和原运行态；
+如果同期管理员在原路径重建了文件，回滚会失败关闭并保留两份证据，绝不覆盖并发更改。
+首次成功后的普通升级不得再传该参数。
+
 该入口默认执行 `origin/main` fast-forward，并固定：
 
 - 源码目录：`/data/WeChatMemory-LicenseServer`；
 - 运维邮箱：`gladlygrady@tutamail.com`；
-- 公网入口：`104.224.90.172:9000`；
+- 公网入口：`104.244.90.172:9000`；
 - 分支：`main`；
 - 只允许干净工作树。
 
@@ -140,18 +167,18 @@ sudo bash deploy/el9/one-click-deploy.sh \
   --signing-key /root/wkm-signing-ed25519.pem \
   --key-id 2026-10-30 \
   --email gladlygrady@tutamail.com \
-  --public-ip 104.224.90.172 \
+  --public-ip 104.244.90.172 \
   --public-port 9000 \
   --firewall-zone public
 ```
 
 脚本会自动完成：
 
-1. 校验 EL9、IPv4、端口和源码，并在任何主机写操作之前确认公网 IP 精确存在于本机 `scope global` 列表；随后反向计算签名私钥的公钥，确认它与仓库跟踪的公开清单一致；
+1. 校验 EL9、IPv4、端口和源码，并在任何主机写操作之前确认公网 IP 精确存在于本机 `scope global` 列表，同时校验首次私钥源或已安装私钥的路径类型、owner 和 mode；候选 release 再反向计算公钥，确认它与仓库跟踪的公开清单一致；
 2. 安装 Nginx、SQLite、Python 3.11、firewalld、SELinux 工具和项目专属 Certbot 环境；
 3. 创建 `wkm-license` 无登录系统账号；
 4. 在唯一的活动 firewalld zone 中精确增加规则（不全量 reload），配置 SELinux 和专属 ACME webroot；SELinux 为 Disabled 时完全跳过 `semanage`/`getsebool`/`setsebool`，为 Enforcing 或 Permissive 时先只读整张端口类型表，确认端口未分配才新增；已属于非 `http_port_t` 类型则失败关闭；
-5. 申请包含 `104.224.90.172` IP SAN 的受信任短期证书；
+5. 申请包含 `104.244.90.172` IP SAN 的受信任短期证书；
 6. 安装每四小时运行、只续期本 IP 证书的专属定时器；
 7. 创建不可变候选 release 源码目录；
 8. 对旧库创建并校验 SQLite 一致备份；
@@ -159,18 +186,20 @@ sudo bash deploy/el9/one-click-deploy.sh \
 10. 安装 systemd 单元和每日备份定时器，原子切换 `current`，启动授权服务并通过本机 `/readyz/deep`；
 11. 切换 Nginx 生产配置，验证公网 HTTPS、证书 SAN、`/readyz` 和签名公钥接口。
 
-在同机多业务环境，脚本只拥有
+在同机多业务环境，脚本默认只拥有
 `/etc/nginx/conf.d/wechat-memory-license.conf`：
 
-- 不删除、改名或覆盖其他 `conf.d` 文件；
+- 不删除、改名或覆盖其他 `conf.d` 文件；唯一例外是操作员本次显式给出且通过
+  路径、归属和冲突校验的 `--retire-nginx-conf`；
 - 若目标文件不含项目 owner marker，也不符合旧版唯一特征，拒绝覆盖；
-- 若其他配置已声明 `104.224.90.172` 或监听 `9000`，拒绝抢占；
+- 若其他配置已声明 `104.244.90.172` 或监听 `9000`，拒绝抢占；
 - 写入前后会校验其他 Nginx 配置的摘要；部署期间它们发生变化就拒绝 reload；
 - 已运行的 Nginx 中 ACME 路由已经实际生效时，不做无意义 reload；新配置则先
   `nginx -t`，再热加载，并用本地 Host 头探针验证。
 
-`entityecho.conf` 这类现有站点可以继续共享 `listen 80`，只要 `server_name`
-不抢占本项目 IP。部署过程中不要同时修改其他 Nginx 站点；需要修改时先结束本次部署。
+`entityecho.conf` 在本次迁移前同时声明了 `104.244.90.172`，会被默认冲突门禁拒绝；
+只能在业务已停用的前提下使用上述一次性退役参数。其他不抢占 IP/9000 的站点继续共存。
+部署过程中不要同时修改其他 Nginx 站点；需要修改时先结束本次部署。
 
 脚本不会删除已经存在的数据库。升级前会先通过 SQLite `.backup` 创建一致性备份。候选版本的
 本机验收、Nginx 切换或公网验收失败时，脚本会恢复部署前的 `current`、`service.env`、
@@ -183,10 +212,11 @@ systemd 单元/服务状态和 Nginx 配置/服务状态；`--tls-mode existing`
 确认不再需要后再按明确路径人工清理。进程被 `SIGKILL` 或主机掉电时 Shell 无法执行 EXIT 补偿，
 事务快照会保留在 `/etc/wechat-memory-license/.one-click-transaction.*` 或 `.install-transaction.*`。下次部署会
 失败关闭，拒绝覆盖这些恢复证据。必须按统一运维手册核对 `current`、`service.env`、systemd、
-Nginx 和数据库备份，确认恢复完成后才能移走事务目录并重新开放流量。
+Nginx、`retired-nginx` 恢复副本和数据库备份，确认恢复完成后才能移走事务目录并重新开放流量。
 
 可在隔离验收机上通过 `WKM_DEPLOY_ENABLE_FAULT_INJECTION=1` 和
-`WKM_DEPLOY_TEST_FAULT=after_application_install|after_nginx_switch` 注入故障。生产日常部署不得设置这两个变量。
+`WKM_DEPLOY_TEST_FAULT=after_nginx_retirement|after_application_install|after_nginx_switch`
+注入故障。生产日常部署不得设置这两个变量。
 
 ### 3.4 使用已有受信任证书
 
@@ -222,8 +252,8 @@ sudo systemctl status wechat-memory-certbot-renew.timer --no-pager
 sudo systemctl status wechat-memory-license-backup.timer --no-pager
 
 curl --fail --silent --show-error http://127.0.0.1:9100/readyz/deep
-curl --fail --silent --show-error https://104.224.90.172:9000/readyz
-curl --fail --silent --show-error https://104.224.90.172:9000/v1/keys
+curl --fail --silent --show-error https://104.244.90.172:9000/readyz
+curl --fail --silent --show-error https://104.244.90.172:9000/v1/keys
 ```
 
 检查监听范围：
@@ -243,7 +273,7 @@ sudo ss -lntp | grep -E ':(80|9000|9100)\b'
 
 ```bash
 sudo openssl x509 \
-  -in /etc/letsencrypt/live/104.224.90.172/fullchain.pem \
+  -in /etc/letsencrypt/live/104.244.90.172/fullchain.pem \
   -noout -issuer -subject -dates -ext subjectAltName
 ```
 
@@ -547,7 +577,7 @@ sudo tail -n 100 /var/log/nginx/wechat-memory-license.access.log
 sudo systemctl status wechat-memory-certbot-renew.timer --no-pager
 sudo journalctl -u wechat-memory-certbot-renew.service --since '24 hours ago'
 sudo /opt/wechat-memory-license-certbot/bin/certbot renew --dry-run \
-  --cert-name 104.224.90.172 \
+  --cert-name 104.244.90.172 \
   --deploy-hook /usr/local/sbin/wkm-certbot-deploy
 ```
 

@@ -1,6 +1,6 @@
 # WeChatMemory 授权服务审计与验收标准
 
-> 基线：服务端 `0.2.3`、SQLite schema 3、授权协议 v1；审计日期 2026-10-30。
+> 基线：服务端 `0.2.4`、SQLite schema 3、授权协议 v1；审计日期 2026-10-30。
 > 客户端数据不变量、真机矩阵和导出门禁见 `WeChatMemory-Client/docs/ACCEPTANCE_CRITERIA.md`。
 
 ## 1. 当前结论
@@ -79,7 +79,7 @@ SQLite 一致备份、顺序 migration 和 EL9 部署素材。本次审计未证
 6. 原子切换应用、venv 和配置，重启；
 7. 检查本机 health/ready/keys，再切换 Nginx；
 8. 检查公网 TLS/SAN/ready/keys，再用专用金丝雀完成 activate → refresh → replay rejection；
-9. 全部通过才标记完成。失败时恢复 Nginx、`current`、`service.env`、systemd
+9. 全部通过才标记完成。失败时恢复 Nginx（包括本次显式退役的站点文件）、`current`、`service.env`、systemd
    单元和服务状态；existing TLS 模式还必须按字节恢复覆盖前的证书与私钥。SQLite migration
    进入可写阶段后不自动降级；脚本必须明示备份位置和
    人工停写/恢复边界，不得将运行态补偿误报为数据库原子回滚。
@@ -127,7 +127,7 @@ SQLite 一致备份、顺序 migration 和 EL9 部署素材。本次审计未证
 | S-P1-09 | 仅有本机 SQLite 备份；异地加密副本和恢复演练只在文档中 | 实际配置异地备份，产出新鲜度告警和月度恢复 RPO/RTO 证据 |
 | S-P1-10 | **工程材料关闭、人工审批仍开放**：仓库已有 proprietary `LICENSE`、11 个运行依赖通知、确定性 SPDX、精确约束和强制发布门禁 | 权利人、法律/隐私负责人完成适用地区、SaaS、EULA、隐私和第三方义务签字；补漏洞扫描审批记录 |
 | S-P1-11 | **源码关闭**：旧 `rotated/revoked` refresh sessions 使用状态专用部分索引、90 天默认保留、500 条固定批次和 20 批默认上限；备份成功后定时执行，HTTP 请求不清理 | active/近期/异常时间保留、过期终态清理、批量边界、并发与外键、v2→v3 数据保留、索引计划和 timer 顺序回归通过 |
-| S-P1-12 | **源码候选已修复，待现场证据**：共享主机部署只拥有专属 Nginx 文件，拒绝其他站点的 IP/端口冲突与并发漂移；不启动已停止的 firewalld、不全量 reload、不改写其他 SELinux 端口类型；Certbot venv/unit/证书线全部专属 | 本地共存/冲突/漂移回归通过；在含真实 `entityecho.conf` 的隔离 EL9 主机完成 ACME、9000 TLS、故障补偿，并比对该站点文件字节和请求响应未变 |
+| S-P1-12 | **源码候选已修复，待现场证据**：共享主机默认只拥有专属 Nginx 文件，拒绝其他站点的 IP/端口冲突与并发漂移；只有操作员显式给出已停用且确实冲突的 conf.d 普通文件时才可事务退役，成功保留字节副本，失败恢复原路径，并发重建时拒绝覆盖；不启动已停止的 firewalld、不全量 reload、不改写其他 SELinux 端口类型；Certbot venv/unit/证书线全部专属 | 本地路径防护、无关站点拒绝、字节保留、成功记录、故障恢复和并发不覆盖回归通过；再在真实 EL9 主机完成 ACME、9000 TLS 与现场故障补偿 |
 
 ### P2
 

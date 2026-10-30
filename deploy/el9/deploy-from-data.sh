@@ -6,9 +6,10 @@ SOURCE_DIR="/data/WeChatMemory-LicenseServer"
 ADMIN_EMAIL="gladlygrady@tutamail.com"
 SIGNING_KEY="/root/wkm-signing-ed25519.pem"
 KEY_ID="2026-10-30"
-PUBLIC_IP="104.224.90.172"
+PUBLIC_IP="104.244.90.172"
 PUBLIC_PORT="9000"
 FIREWALL_ZONE=""
+RETIRE_NGINX_CONF=""
 ALLOW_UNBOUND_PUBLIC_IP=0
 UPDATE_SOURCE=1
 
@@ -23,9 +24,10 @@ usage() {
   --source PATH            源码目录，默认 /data/WeChatMemory-LicenseServer
   --email ADDRESS          证书通知邮箱，默认 gladlygrady@tutamail.com
   --key-id ID              签名密钥 ID，默认 2026-10-30
-  --public-ip IP           默认 104.224.90.172
+  --public-ip IP           默认 104.244.90.172
   --public-port PORT       默认 9000
   --firewall-zone ZONE     多 firewalld zone 主机的公网 zone
+  --retire-nginx-conf PATH 显式退役抢占目标 IP 的已停用 conf.d 普通文件
   --allow-unbound-public-ip
                            仅限已人工验证的 1:1 NAT/EIP；跳过本机 IP 归属门禁
   --skip-update            不从 origin/main 执行 fast-forward 更新
@@ -43,6 +45,7 @@ while [[ $# -gt 0 ]]; do
     --public-ip) PUBLIC_IP="$2"; shift 2 ;;
     --public-port) PUBLIC_PORT="$2"; shift 2 ;;
     --firewall-zone) FIREWALL_ZONE="$2"; shift 2 ;;
+    --retire-nginx-conf) RETIRE_NGINX_CONF="$2"; shift 2 ;;
     --allow-unbound-public-ip) ALLOW_UNBOUND_PUBLIC_IP=1; shift ;;
     --skip-update) UPDATE_SOURCE=0; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -81,12 +84,13 @@ arguments=(
   --key-id "${KEY_ID}"
   --public-ip "${PUBLIC_IP}"
   --public-port "${PUBLIC_PORT}"
+  --signing-key "${SIGNING_KEY}"
 )
-if [[ -f "${SIGNING_KEY}" ]]; then
-  arguments+=(--signing-key "${SIGNING_KEY}")
-fi
 if [[ -n "${FIREWALL_ZONE}" ]]; then
   arguments+=(--firewall-zone "${FIREWALL_ZONE}")
+fi
+if [[ -n "${RETIRE_NGINX_CONF}" ]]; then
+  arguments+=(--retire-nginx-conf "${RETIRE_NGINX_CONF}")
 fi
 if (( ALLOW_UNBOUND_PUBLIC_IP )); then
   arguments+=(--allow-unbound-public-ip)

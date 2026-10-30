@@ -121,4 +121,11 @@ wkm_version_at_least 005.004.000 5 4
 ! wkm_version_at_least 4.999.999 5 4
 ! wkm_version_at_least invalid 5 4
 
+SYMLINK_TARGET="${TEST_ROOT}/transaction-target"
+SYMLINK_PATH="${TEST_ROOT}/transaction-symlink"
+printf 'target\n' >"${SYMLINK_TARGET}"
+ln -s "${SYMLINK_TARGET}" "${SYMLINK_PATH}"
+! wkm_tx_capture_file "${TEST_ROOT}/symlink-transaction" \
+  "${SYMLINK_PATH}" symlink-file >/dev/null 2>&1
+
 echo "deployment transaction self-test: ok"

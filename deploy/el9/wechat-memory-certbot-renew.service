@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/opt/wechat-memory-license-certbot/bin/certbot renew --quiet --cert-name 104.224.90.172 --deploy-hook /usr/local/sbin/wkm-certbot-deploy
+ExecStart=/opt/wechat-memory-license-certbot/bin/certbot renew --quiet --cert-name 104.244.90.172 --deploy-hook /usr/local/sbin/wkm-certbot-deploy
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=full

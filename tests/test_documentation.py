@@ -48,13 +48,13 @@ class DocumentationContractTests(unittest.TestCase):
                 "deploy/el9/deploy-from-data.sh": (
                     f'SOURCE_DIR="{CHECKER.SOURCE_DIRECTORY}"',
                     f'ADMIN_EMAIL="{CHECKER.ADMIN_EMAIL}"',
-                    'PUBLIC_IP="104.224.90.172"',
+                    'PUBLIC_IP="104.244.90.172"',
                     'PUBLIC_PORT="9000"',
                 ),
                 "deploy/el9/one-click-deploy.sh": (
                     f'SOURCE_DIR="{CHECKER.SOURCE_DIRECTORY}"',
                     f'EMAIL="{CHECKER.ADMIN_EMAIL}"',
-                    'PUBLIC_IP="104.224.90.172"',
+                    'PUBLIC_IP="104.244.90.172"',
                     'PUBLIC_PORT="9000"',
                 ),
             }.items():
@@ -67,6 +67,18 @@ class DocumentationContractTests(unittest.TestCase):
                 any("unsafe angle-bracket placeholder" in item for item in errors)
             )
 
+    def test_retired_public_ip_is_rejected_from_deployment_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "deploy/el9").mkdir(parents=True)
+            (root / "deploy/el9/template.conf").write_text(
+                f"server_name {CHECKER.RETIRED_PUBLIC_IP};\n", encoding="utf-8"
+            )
+            errors = CHECKER.check_repository(root)
+            self.assertTrue(
+                any("retired public IP remains" in item for item in errors)
+            )
+
     def test_release_installer_enforces_documentation_contract(self) -> None:
         installer = (ROOT / "deploy" / "el9" / "install-release.sh").read_text(
             encoding="utf-8"
@@ -77,6 +89,7 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("sbom/server-runtime.spdx.json", installer)
         self.assertIn("scripts/generate_sbom.py", installer)
         self.assertIn("deploy/el9/deployment-transaction.sh", installer)
+        self.assertIn("deploy/el9/signing-key-safety.sh", installer)
         self.assertIn("deploy/el9/shared-host-safety.sh", installer)
         self.assertIn("deploy/el9/test-deployment-transaction.sh", installer)
         self.assertIn("docs/SERVER_OPERATIONS_RUNBOOK.md", installer)
@@ -97,11 +110,15 @@ class DocumentationContractTests(unittest.TestCase):
             'python3.11 "${SOURCE_DIR}/scripts/check_documentation.py"'
         )
         bootstrap = one_click.index("BOOTSTRAP=/etc/nginx/conf.d/")
+        retirement_validation = one_click.index("wkm_validate_retire_nginx_conf")
+        package_install = one_click.index("dnf install -y")
         exit_trap = one_click.index("trap on_deploy_exit EXIT")
         bootstrap_install = one_click.index(
             'install -o root -g root -m 0644 "${BOOTSTRAP}.tmp" "${BOOTSTRAP}"'
         )
-        self.assertLess(documentation_gate, bootstrap)
+        self.assertLess(bootstrap, retirement_validation)
+        self.assertLess(retirement_validation, package_install)
+        self.assertLess(documentation_gate, exit_trap)
         self.assertLess(bootstrap, exit_trap)
         self.assertLess(exit_trap, bootstrap_install)
         self.assertIn("DEPLOY_COMPLETED=1", one_click)

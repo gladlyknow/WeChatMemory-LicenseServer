@@ -1,7 +1,7 @@
 {
   "SPDXID": "SPDXRef-DOCUMENT",
   "creationInfo": {
-    "created": "2026-10-30T07:38:09Z",
+    "created": "1970-01-01T00:00:00Z",
     "creators": [
       "Organization: WeChatMemory",
       "Tool: scripts/generate_sbom.py"
@@ -11,7 +11,7 @@
   "documentDescribes": [
     "SPDXRef-Package-wechat-memory-license-server"
   ],
-  "documentNamespace": "https://github.com/gladlyknow/WeChatMemory-LicenseServer/spdx/0.2.3/3cbddefb1d5e8a6f1875790f99f6b5605a4f743eacf6db807622165e49c574cd",
+  "documentNamespace": "https://github.com/gladlyknow/WeChatMemory-LicenseServer/spdx/0.2.4/cef64a58b1df546facf532276cfbefb4ccf0ec317c5e59ca9d7e70dda1c72ae5",
   "hasExtractedLicensingInfos": [
     {
       "comment": "Engineering release baseline; human legal review remains required.",
@@ -20,7 +20,7 @@
       "name": "WeChatMemory License Server Proprietary Software License"
     }
   ],
-  "name": "wechat-memory-license-server-0.2.3-runtime",
+  "name": "wechat-memory-license-server-0.2.4-runtime",
   "packages": [
     {
       "SPDXID": "SPDXRef-Package-wechat-memory-license-server",
@@ -32,7 +32,7 @@
       "licenseDeclared": "LicenseRef-WeChatMemory-License-Server-Proprietary",
       "name": "wechat-memory-license-server",
       "primaryPackagePurpose": "APPLICATION",
-      "versionInfo": "0.2.3"
+      "versionInfo": "0.2.4"
     },
     {
       "SPDXID": "SPDXRef-Package-blinker",

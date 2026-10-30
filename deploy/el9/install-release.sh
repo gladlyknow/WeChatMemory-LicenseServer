@@ -26,6 +26,18 @@ if [[ ! -f "${SCRIPT_DIR}/deployment-transaction.sh" ]]; then
 fi
 # shellcheck source=deployment-transaction.sh
 . "${SCRIPT_DIR}/deployment-transaction.sh"
+if [[ ! -f "${SCRIPT_DIR}/signing-key-safety.sh" ]]; then
+  echo "缺少签名私钥文件安全门禁：${SCRIPT_DIR}/signing-key-safety.sh" >&2
+  exit 3
+fi
+# shellcheck source=signing-key-safety.sh
+. "${SCRIPT_DIR}/signing-key-safety.sh"
+if [[ -n "${STAGED_KEY}" ]] && \
+   { [[ -e "${STAGED_KEY}" ]] || [[ -L "${STAGED_KEY}" ]]; }; then
+  # Validate the first-use source before creating users, directories, release
+  # candidates or backups.  The helper reads metadata only, never PEM bytes.
+  wkm_assert_staged_signing_key "${STAGED_KEY}"
+fi
 
 APP_ROOT=/opt/wechat-memory-license
 STATE_ROOT=/var/lib/wechat-memory-license
@@ -106,8 +118,9 @@ REQUIRED_RELEASE_DOCUMENTS=(
   docs/ONE_CLICK_DEPLOY_AND_ADMIN.md
   docs/MANUAL_DEPLOY_EL9_IP_CERT.md
   docs/SIGNING_KEY_OPERATIONS.md
-  docs/DEPLOYMENT_104.224.90.172.md
+  docs/DEPLOYMENT_104.244.90.172.md
   deploy/el9/deployment-transaction.sh
+  deploy/el9/signing-key-safety.sh
   deploy/el9/shared-host-safety.sh
   deploy/el9/test-deployment-transaction.sh
   sbom/server-runtime.spdx.json
@@ -195,7 +208,8 @@ MANIFEST_PATH="${RELEASE_DIR}/config/signing-public-keys.json"
 KEY_PATH="${CONFIG_ROOT}/signing-ed25519-${KEY_ID}.pem"
 LEGACY_KEY_PATH="${CONFIG_ROOT}/signing-ed25519.pem"
 KEY_SOURCE=""
-if [[ -f "${KEY_PATH}" ]]; then
+if [[ -e "${KEY_PATH}" || -L "${KEY_PATH}" ]]; then
+  wkm_assert_installed_signing_key "${KEY_PATH}" wkm-license
   KEY_SOURCE="${KEY_PATH}"
   if [[ -n "${STAGED_KEY}" && -f "${STAGED_KEY}" ]] && \
       ! cmp -s -- "${STAGED_KEY}" "${KEY_PATH}"; then
@@ -204,7 +218,8 @@ if [[ -f "${KEY_PATH}" ]]; then
   fi
 elif [[ -n "${STAGED_KEY}" && -f "${STAGED_KEY}" ]]; then
   KEY_SOURCE="${STAGED_KEY}"
-elif [[ -f "${LEGACY_KEY_PATH}" ]]; then
+elif [[ -e "${LEGACY_KEY_PATH}" || -L "${LEGACY_KEY_PATH}" ]]; then
+  wkm_assert_installed_signing_key "${LEGACY_KEY_PATH}" wkm-license
   KEY_SOURCE="${LEGACY_KEY_PATH}"
 else
   echo "找不到 key-id=${KEY_ID} 的 Ed25519 私钥。" >&2
@@ -220,6 +235,7 @@ fi
 if [[ ! -f "${KEY_PATH}" ]]; then
   install -o root -g wkm-license -m 0640 "${KEY_SOURCE}" "${KEY_PATH}"
 fi
+wkm_assert_installed_signing_key "${KEY_PATH}" wkm-license
 
 ENV_PATH="${CONFIG_ROOT}/service.env"
 SERVICE_UNIT=/etc/systemd/system/wechat-memory-license.service

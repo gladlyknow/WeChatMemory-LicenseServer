@@ -1,7 +1,7 @@
 # WeChatMemory 授权服务统一运维手册
 
 > 适用：Enterprise Linux 9，源码 `/data/WeChatMemory-LicenseServer`，
-> 公网 `https://104.224.90.172:9000`，邮箱 `gladlygrady@tutamail.com`。
+> 公网 `https://104.244.90.172:9000`，邮箱 `gladlygrady@tutamail.com`。
 > 本文是值班人员的统一入口；密钥轮换等高风险操作会链接到专题手册。
 
 ## 1. 系统做什么
@@ -46,7 +46,7 @@ flowchart LR
 
 - 云安全组与 firewalld 允许 `80/tcp` 和 `9000/tcp`；
 - `22/tcp` 限定管理来源；`9100/tcp` 不对公网开放；
-- `104.224.90.172` 指向本机，80 端口可用于 ACME HTTP-01；
+- `104.244.90.172` 指向本机，80 端口可用于 ACME HTTP-01；
 - 已安全准备与跟踪公钥清单匹配的 `/root/wkm-signing-ed25519.pem`；
 - 系统时间同步正常，磁盘不是 NFS/SMB。
 
@@ -78,7 +78,7 @@ sudo bash deploy/el9/deploy-from-data.sh \
 入口脚本默认使用：
 
 - `/data/WeChatMemory-LicenseServer`；
-- `104.224.90.172:9000`；
+- `104.244.90.172:9000`；
 - `gladlygrady@tutamail.com`；
 - `key-id=2026-10-30`；
 - `origin/main` 的 fast-forward 更新。
@@ -95,8 +95,8 @@ sudo systemctl is-enabled wechat-memory-license-backup.timer
 sudo systemctl is-enabled wechat-memory-certbot-renew.timer
 
 curl --fail --silent --show-error http://127.0.0.1:9100/readyz/deep
-curl --fail --silent --show-error https://104.224.90.172:9000/readyz
-curl --fail --silent --show-error https://104.224.90.172:9000/v1/keys
+curl --fail --silent --show-error https://104.244.90.172:9000/readyz
+curl --fail --silent --show-error https://104.244.90.172:9000/v1/keys
 
 sudo -u wkm-license sqlite3 \
   /var/lib/wechat-memory-license/license.sqlite3 \
@@ -129,12 +129,16 @@ sudo bash deploy/el9/deploy-from-data.sh
 已有通过校验的 Nginx 生产配置时，升级过程不会先切换到 bootstrap。从写入候选 `service.env`
 到公网 `/readyz` 和 `/v1/keys` 验收完成前，统一补偿事务覆盖 `current`、`service.env`、systemd 单元/服务状态、
 Nginx 配置/服务状态以及相关 timer；existing TLS 模式还捕获覆盖前的证书和私钥。任一检查失败都恢复部署前快照。
+首次从已停用 `entityecho.conf` 接管公网 IP 时，仅可显式传入
+`--retire-nginx-conf /etc/nginx/conf.d/entityecho.conf`。退役前会保存事务副本；成功后副本与记录位于
+`/etc/wechat-memory-license/retired-nginx/retirement.*/`；失败时按字节恢复。原路径若在部署期间被重建，
+回滚不会覆盖它，而是保留快照并停止自动 reload。普通升级不得重复传入退役参数。
 
 风险：
 
 - 补偿回滚不替代业务回归测试；回滚失败时脚本会明确报警，不会误报成功；
 - SQLite migration 不在服务可能产生新写入后自动降级。恢复升级前备份必须先停写、确认数据丢失窗口并获得运维批准；
-- `SIGKILL`/掉电无法执行 Shell EXIT 补偿；遗留的 `/etc/wechat-memory-license/.*transaction.*` 会阻断下次部署。必须先核对 `current`、`service.env`、systemd、Nginx 和备份，不能仅删目录或重跑脚本；
+- `SIGKILL`/掉电无法执行 Shell EXIT 补偿；遗留的 `/etc/wechat-memory-license/.*transaction.*` 会阻断下次部署。必须先核对 `current`、`service.env`、systemd、Nginx、`retired-nginx` 和备份，不能仅删目录或重跑脚本；
 - dnf 软件包、Let's Encrypt 已签发证书、失败候选 release 和未激活版本化私钥不在自动删除范围；
   本次部署新增的 firewalld/SELinux 规则会精确补偿，不重载整个防火墙，也不改写其他端口类型；
   existing 模式固定路径上的证书/私钥属于旧流量运行态，失败时会从事务快照恢复；
@@ -344,7 +348,7 @@ sudo journalctl -u wechat-memory-license --since '30 minutes ago' --no-pager
 sudo journalctl -u wechat-memory-certbot-renew.service --since '24 hours ago' --no-pager
 sudo tail -n 100 /var/log/nginx/wechat-memory-license.error.log
 sudo openssl x509 \
-  -in /etc/letsencrypt/live/104.224.90.172/fullchain.pem \
+  -in /etc/letsencrypt/live/104.244.90.172/fullchain.pem \
   -noout -issuer -subject -dates -ext subjectAltName
 ```
 

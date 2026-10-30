@@ -1,7 +1,7 @@
 # WeChatMemory 授权服务原理、接口与运维设计
 
-> 基线：License Server `0.2.3` / Client `0.3.3`
-> 公网入口：`https://104.224.90.172:9000`
+> 基线：License Server `0.2.4` / Client `0.3.4`
+> 公网入口：`https://104.244.90.172:9000`
 > 存储：单机 SQLite3，客户聊天数据不上云。
 > 文档导航见 [`README.md`](README.md)，生产操作见
 > [`SERVER_OPERATIONS_RUNBOOK.md`](SERVER_OPERATIONS_RUNBOOK.md)。
@@ -231,5 +231,5 @@ Waitress 的监听地址固定在 systemd 单元的 `127.0.0.1:9100`，不由 `s
 ## 11. 当前交付状态
 
 - 已完成：SQLite schema v3、套餐快照、注册脚本、激活、设备上限、refresh token 轮换、吊销、终态会话有界保留清理、Ed25519 票据、限流、systemd/Nginx 部署素材和自动化测试。
-- 已完成：客户端 `0.3.3` 激活页、未激活锁定、内置公钥验签、公钥清单生成、后台刷新、到期只读和 capability gate。
-- 待完成：已具备 SSH 管理入口，需在 `104.224.90.172` 上执行 `/data/WeChatMemory-LicenseServer/deploy/el9/deploy-from-data.sh`，并完成激活、刷新、吊销、离线和备份恢复验收。
+- 已完成：客户端 `0.3.4` 激活页、未激活锁定、内置公钥验签、公钥清单生成、后台刷新、到期只读和 capability gate。
+- 待完成：已具备 SSH 管理入口，需在 `104.244.90.172` 上执行 `/data/WeChatMemory-LicenseServer/deploy/el9/deploy-from-data.sh`，并完成激活、刷新、吊销、离线和备份恢复验收。

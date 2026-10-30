@@ -59,7 +59,10 @@ wkm_tx_capture_file() {
   local name="$3"
   wkm_tx_require_name "${name}" || return
   install -d -m 0700 "${transaction_dir}"
-  if [[ -f "${path}" ]]; then
+  if [[ -L "${path}" ]]; then
+    echo "部署事务拒绝把软链接当作普通文件捕获：${path}" >&2
+    return 2
+  elif [[ -f "${path}" ]]; then
     printf 'present\n' >"${transaction_dir}/${name}.state"
     cp -a -- "${path}" "${transaction_dir}/${name}.backup"
   elif [[ -e "${path}" || -L "${path}" ]]; then

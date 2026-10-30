@@ -4,8 +4,8 @@
 > [`SERVER_OPERATIONS_RUNBOOK.md`](SERVER_OPERATIONS_RUNBOOK.md) 与
 > [`ONE_CLICK_DEPLOY_AND_ADMIN.md`](ONE_CLICK_DEPLOY_AND_ADMIN.md)。
 
-> 目标服务器：`104.224.90.172`  
-> 公网入口：`https://104.224.90.172:9000`  
+> 目标服务器：`104.244.90.172`
+> 公网入口：`https://104.244.90.172:9000`
 > 适用范围：RHEL 9、Rocky Linux 9、AlmaLinux 9、Oracle Linux 9、CentOS Stream 9  
 > 状态：可执行的手工部署手册；授权 API 已实现，尚需在目标服务器执行本手册
 
@@ -40,7 +40,7 @@ IP 短期证书当前有效期为 160 小时（约 6 天 16 小时）。所以�
 
 还必须确认：
 
-1. `104.224.90.172` 已直接绑定到这台服务器；
+1. `104.244.90.172` 已直接绑定到这台服务器；
 2. 上游没有把 80 或 9000 转发给别的主机；
 3. 系统已升级到当前 EL9 小版本；
 4. 服务器时间同步正常；
@@ -50,12 +50,13 @@ IP 短期证书当前有效期为 160 小时（约 6 天 16 小时）。所以�
 在任何安装、防火墙或 Nginx 变更前，先执行与一键部署相同的只读归属门禁：
 
 ```bash
-PUBLIC_IP=104.224.90.172
+PUBLIC_IP=104.244.90.172
 source /data/WeChatMemory-LicenseServer/deploy/el9/public-ip-safety.sh
 wkm_assert_public_ip_bound "${PUBLIC_IP}" 0
 ```
 
-返回非零时必须停止。例如 `104.224.90.172` 和 `104.244.90.172` 只差一位，也必须拒绝；
+返回非零时必须停止。例如实际地址 `104.244.90.172` 和已退役的错误旧地址
+`104.224.90.172` 只差一位，也必须拒绝；
 不能通过改写现有 Nginx 业务配置来“适配”错误的 IP。如果该公网 IP 是云平台已人工验证的
 1:1 NAT/EIP，不会出现在客户机 `scope global` 列表中，一键部署才可显式使用
 `--allow-unbound-public-ip`。启用例外前必须先在云平台核对绑定/NAT，并从服务器外部验证 TCP/80；
@@ -151,7 +152,7 @@ fi
 从服务器外部访问以下地址应返回 404，但必须能建立 HTTP 连接：
 
 ```text
-http://104.224.90.172/.well-known/acme-challenge/probe
+http://104.244.90.172/.well-known/acme-challenge/probe
 ```
 
 ### 6.2 多业务服务器的无损 ACME 排错
@@ -160,11 +161,13 @@ http://104.224.90.172/.well-known/acme-challenge/probe
 请先停止重试签发。这表示 CA 还没有进入 webroot 文件校验阶段；应先确认公网 IP、
 Nginx 80 端口和入站防火墙。若服务器同时托管其他站点，不得删除、覆盖或改写其他
 `/etc/nginx/conf.d/*.conf`；Nginx 可以根据 `server_name` 使多个 80 端口虚拟主机并存。
+唯一例外是业务负责人已确认整个站点停用，并通过一键部署的
+`--retire-nginx-conf` 显式授权事务退役；不得用 `rm` 或手工改名替代该流程。
 
 先执行只读核对：
 
 ```bash
-PUBLIC_IP=104.224.90.172
+PUBLIC_IP=104.244.90.172
 PUBLIC_IF="$(ip -4 route show default | awk 'NR == 1 { print $5 }')"
 PUBLIC_ZONE="$(firewall-cmd --get-zone-of-interface="${PUBLIC_IF}")"
 if [ -z "${PUBLIC_ZONE}" ] || [ "${PUBLIC_ZONE}" = "no zone" ]; then
@@ -187,9 +190,12 @@ sudo firewall-cmd --zone="${PUBLIC_ZONE}" --list-all
 
 `ip address` 显示的地址可能是云服务商的内网地址；`api.ipify.org` 只能说明出站 NAT
 地址，也不能单独证明入站 IP 已绑定。最终以云平台实例的公网 IPv4/EIP 绑定为准。
-例如现有业务配置使用 `104.244.90.172`，而本服务计划使用
-`104.224.90.172`，必须先在云平台核对两个地址的归属，不得用修改现有站点配置
-的方式“试错”。
+本项目早期误用 `104.224.90.172`，实际本机地址为 `104.244.90.172`。旧地址已退役，
+不得再用它调用 Certbot。当已停用的 `entityecho.conf` 也声明实际 IP 时，应优先使用
+一键部署的显式
+`--retire-nginx-conf /etc/nginx/conf.d/entityecho.conf` 事务退役流程，不要直接删除文件。
+该流程会校验文件确实与目标 IP/9000 冲突，成功时保留可恢复的字节副本，
+任一步失败时恢复原路径和 Nginx 运行态。
 
 只有在 Nginx 配置通过、服务处于 `active`、`ss` 确认 80 端口监听后，才针对公网
 网卡实际所属 zone 精确开放 HTTP；不需要 reload firewalld，也不改动其他规则：
@@ -221,7 +227,7 @@ curl --fail --show-error --max-time 5 \
 
 ```bash
 curl --fail --show-error --max-time 10 \
-  http://104.224.90.172/.well-known/acme-challenge/wkm-probe.txt
+  http://104.244.90.172/.well-known/acme-challenge/wkm-probe.txt
 ```
 
 如果本机成功、外部仍是 `connection refused`，问题位于主机外部：核对云安全组/入站
@@ -238,7 +244,7 @@ sudo /opt/wechat-memory-license-certbot/bin/certbot certonly --staging --non-int
   --agree-tos --email 'gladlygrady@tutamail.com' \
   --preferred-profile shortlived \
   --webroot --webroot-path /var/www/wechat-memory-license-acme \
-  --ip-address 104.224.90.172 --cert-name 104.224.90.172-staging
+  --ip-address 104.244.90.172 --cert-name 104.244.90.172-staging
 ```
 
 staging 使用独立的 cert-name，避免 Certbot 把未到期的测试证书当成正式证书线继续复用。
@@ -249,21 +255,21 @@ sudo /opt/wechat-memory-license-certbot/bin/certbot certonly --non-interactive \
   --agree-tos --email 'gladlygrady@tutamail.com' \
   --preferred-profile shortlived \
   --webroot --webroot-path /var/www/wechat-memory-license-acme \
-  --ip-address 104.224.90.172 --cert-name 104.224.90.172
+  --ip-address 104.244.90.172 --cert-name 104.244.90.172
 ```
 
 正式证书已验证可用后，可以删除隔离的 staging 线继：
 
 ```bash
 sudo /opt/wechat-memory-license-certbot/bin/certbot delete --non-interactive \
-  --cert-name 104.224.90.172-staging
+  --cert-name 104.244.90.172-staging
 ```
 
 不得把 staging 证书用于客户端。正式证书应出现在：
 
 ```text
-/etc/letsencrypt/live/104.224.90.172/fullchain.pem
-/etc/letsencrypt/live/104.224.90.172/privkey.pem
+/etc/letsencrypt/live/104.244.90.172/fullchain.pem
+/etc/letsencrypt/live/104.244.90.172/privkey.pem
 ```
 
 ## 7. 启用 9000 HTTPS
@@ -280,8 +286,8 @@ sudo systemctl reload nginx
 如果授权 API 尚未启动，访问 9000 得到 502 是预期现象；证书和 TLS 握手仍可单独验证：
 
 ```bash
-openssl s_client -connect 104.224.90.172:9000 \
-  -servername 104.224.90.172 -verify_return_error </dev/null
+openssl s_client -connect 104.244.90.172:9000 \
+  -servername 104.244.90.172 -verify_return_error </dev/null
 ```
 
 不得在 Windows 客户端关闭证书验证，也不得为 IP 地址设置“忽略证书错误”。
@@ -301,7 +307,7 @@ sudo systemctl list-timers wechat-memory-certbot-renew.timer
 ```
 
 这些单元、hook 和 Certbot 虚拟环境全部使用 WeChatMemory 专属名称。它们不会覆盖其他站点的
-`certbot-renew.service/timer` 或 `/opt/certbot`，并且续期命令通过 `--cert-name 104.224.90.172`
+`certbot-renew.service/timer` 或 `/opt/certbot`，并且续期命令通过 `--cert-name 104.244.90.172`
 只处理本项目的证书线。
 
 若旧版 WeChatMemory 曾安装通用名称的 `certbot-renew.timer`，不要直接删除或停用。先执行
@@ -313,7 +319,7 @@ sudo systemctl list-timers wechat-memory-certbot-renew.timer
 
 ```bash
 sudo /opt/wechat-memory-license-certbot/bin/certbot renew --dry-run \
-  --cert-name 104.224.90.172 \
+  --cert-name 104.244.90.172 \
   --deploy-hook /usr/local/sbin/wkm-certbot-deploy
 ```
 
@@ -322,7 +328,7 @@ sudo /opt/wechat-memory-license-certbot/bin/certbot renew --dry-run \
 ```bash
 sudo systemctl status wechat-memory-certbot-renew.timer
 sudo journalctl -u wechat-memory-certbot-renew.service --since '24 hours ago'
-sudo openssl x509 -in /etc/letsencrypt/live/104.224.90.172/cert.pem \
+sudo openssl x509 -in /etc/letsencrypt/live/104.244.90.172/cert.pem \
   -noout -issuer -subject -dates
 ```
 
@@ -347,7 +353,7 @@ git rev-parse --short HEAD
 
 ### 9.2 首次部署生产签名私钥
 
-客户端 `0.3.3` 生成信任根中的生产公钥必须与服务器私钥一致。将开发端忽略目录中的
+客户端 `0.3.4` 生成信任根中的生产公钥必须与服务器私钥一致。将开发端忽略目录中的
 `.secrets/signing-ed25519.pem` 通过受控通道上传为 `/root/wkm-signing-ed25519.pem`，不能经过 Git、聊天工具或工单传输。
 
 在服务器核对权限：
@@ -404,9 +410,9 @@ sudo -u wkm-license /opt/wechat-memory-license/current/.venv/bin/python \
 ### 9.5 启用 Nginx 后做公网验证
 
 ```bash
-curl --fail --silent --show-error https://104.224.90.172:9000/healthz
-curl --fail --silent --show-error https://104.224.90.172:9000/readyz
-curl --fail --silent --show-error https://104.224.90.172:9000/v1/keys
+curl --fail --silent --show-error https://104.244.90.172:9000/healthz
+curl --fail --silent --show-error https://104.244.90.172:9000/readyz
+curl --fail --silent --show-error https://104.244.90.172:9000/v1/keys
 ```
 
 `/v1/keys` 返回的 `key_id` 应为 `2026-10-30`，`public_key` 应与客户端内置值完全相同。
@@ -421,7 +427,7 @@ curl --fail --silent --show-error https://104.224.90.172:9000/v1/keys
 4. 使用 SQLite `.backup` 备份当前数据库，单独保留匹配配置，并完成一次完整性验证；
 5. 执行受版本控制的 migration，原子切换 `current`，并重启服务；
 6. 检查本机 `127.0.0.1:9100/readyz/deep`，通过后才切换 Nginx；
-7. 检查公网 `https://104.224.90.172:9000/readyz` 和 `/v1/keys`；
+7. 检查公网 `https://104.244.90.172:9000/readyz` 和 `/v1/keys`；
 8. 失败时恢复上一版 `current`、`service.env`、systemd 单元/服务状态与 Nginx 配置/服务状态；
 9. 不自动降级已执行的 SQLite migration。只有确认没有新写入并且已进入维护窗口时，才按恢复流程手工使用升级前备份。
 
@@ -431,7 +437,7 @@ SQLite 备份必须使用 SQLite Online Backup API 或 `sqlite3 .backup`，不�
 ## 11. 上线验收清单
 
 - [ ] 云安全组只开放受控 SSH、80、9000；
-- [ ] 9000 是受信任正式证书，证书标识包含 `104.224.90.172`；
+- [ ] 9000 是受信任正式证书，证书标识包含 `104.244.90.172`；
 - [ ] 80 除 ACME challenge 外全部返回 404；
 - [ ] 9100 从公网不可达；
 - [ ] 自动续期 dry-run 成功，timer 已启用；

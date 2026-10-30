@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 
-PUBLIC_IP="104.224.90.172"
+PUBLIC_IP="104.244.90.172"
 PUBLIC_PORT="9000"
 SOURCE_DIR="/data/WeChatMemory-LicenseServer"
 SIGNING_KEY="/root/wkm-signing-ed25519.pem"
@@ -14,6 +14,7 @@ EXISTING_KEY=""
 CERTBOT_VERSION="5.9.0"
 CERTBOT_ROOT="/opt/wechat-memory-license-certbot"
 FIREWALL_ZONE=""
+RETIRE_NGINX_CONF=""
 ALLOW_UNBOUND_PUBLIC_IP=0
 
 usage() {
@@ -26,7 +27,7 @@ usage() {
 
 常用选项：
   --source PATH            当前服务端源码目录，默认 /data/WeChatMemory-LicenseServer
-  --public-ip IP           公网 IPv4，默认 104.224.90.172
+  --public-ip IP           公网 IPv4，默认 104.244.90.172
   --public-port PORT       公网 HTTPS 端口，默认 9000
   --key-id ID              Ed25519 key id，默认 2026-10-30
   --tls-mode MODE          letsencrypt 或 existing
@@ -34,6 +35,8 @@ usage() {
   --tls-key PATH           existing 模式的 TLS 私钥
   --certbot-version VER    默认 5.9.0，最低必须为 5.4
   --firewall-zone ZONE     firewalld 活动 zone；多 zone 主机必须显式指定
+  --retire-nginx-conf PATH 显式退役抢占目标 IP 的已停用 conf.d 普通文件；
+                           成功后字节备份保留在 /etc/wechat-memory-license/retired-nginx
   --allow-unbound-public-ip
                            仅限已人工验证的 1:1 NAT/EIP；跳过本机 IP 归属门禁
 
@@ -54,6 +57,7 @@ while [[ $# -gt 0 ]]; do
     --tls-key) EXISTING_KEY="$2"; shift 2 ;;
     --certbot-version) CERTBOT_VERSION="$2"; shift 2 ;;
     --firewall-zone) FIREWALL_ZONE="$2"; shift 2 ;;
+    --retire-nginx-conf) RETIRE_NGINX_CONF="$2"; shift 2 ;;
     --allow-unbound-public-ip) ALLOW_UNBOUND_PUBLIC_IP=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "未知参数：$1" >&2; usage >&2; exit 2 ;;
@@ -109,12 +113,31 @@ if [[ ! -f "${SOURCE_DIR}/deploy/el9/deployment-transaction.sh" ]]; then
 fi
 # shellcheck source=deployment-transaction.sh
 . "${SOURCE_DIR}/deploy/el9/deployment-transaction.sh"
+if [[ ! -f "${SOURCE_DIR}/deploy/el9/signing-key-safety.sh" ]]; then
+  echo "源码缺少签名私钥文件安全门禁。" >&2
+  exit 3
+fi
+# shellcheck source=signing-key-safety.sh
+. "${SOURCE_DIR}/deploy/el9/signing-key-safety.sh"
 if [[ ! -f "${SOURCE_DIR}/deploy/el9/selinux-port-safety.sh" ]]; then
   echo "源码缺少 SELinux 共存安全库。" >&2
   exit 3
 fi
 # shellcheck source=selinux-port-safety.sh
 . "${SOURCE_DIR}/deploy/el9/selinux-port-safety.sh"
+BOOTSTRAP=/etc/nginx/conf.d/wechat-memory-license.conf
+if [[ ! -f "${SOURCE_DIR}/deploy/el9/shared-host-safety.sh" ]]; then
+  echo "源码缺少共享主机安全门禁。" >&2
+  exit 3
+fi
+# shellcheck source=shared-host-safety.sh
+. "${SOURCE_DIR}/deploy/el9/shared-host-safety.sh"
+wkm_assert_owned_nginx_file "${BOOTSTRAP}"
+if [[ -n "${RETIRE_NGINX_CONF}" ]]; then
+  RETIRE_NGINX_CONF="$(wkm_validate_retire_nginx_conf \
+    "${RETIRE_NGINX_CONF}" "${BOOTSTRAP}" /etc/nginx/conf.d \
+    "${PUBLIC_IP}" "${PUBLIC_PORT}")"
+fi
 if ! wkm_version_at_least "${CERTBOT_VERSION}" 5 4; then
   echo "--certbot-version 必须不低于 5.4.0。" >&2
   exit 2
@@ -130,6 +153,14 @@ if [[ "${VERSION_ID%%.*}" != "9" ]]; then
 fi
 VERSIONED_KEY="/etc/wechat-memory-license/signing-ed25519-${KEY_ID}.pem"
 LEGACY_KEY=/etc/wechat-memory-license/signing-ed25519.pem
+if [[ -e "${SIGNING_KEY}" || -L "${SIGNING_KEY}" ]]; then
+  wkm_assert_staged_signing_key "${SIGNING_KEY}"
+fi
+if [[ -e "${VERSIONED_KEY}" || -L "${VERSIONED_KEY}" ]]; then
+  wkm_assert_installed_signing_key "${VERSIONED_KEY}" wkm-license
+elif [[ -e "${LEGACY_KEY}" || -L "${LEGACY_KEY}" ]]; then
+  wkm_assert_installed_signing_key "${LEGACY_KEY}" wkm-license
+fi
 if [[ ! -f "${VERSIONED_KEY}" && ! -f "${LEGACY_KEY}" && ! -f "${SIGNING_KEY}" ]]; then
   echo "找不到 key-id=${KEY_ID} 的私钥；首次部署默认从 /root/wkm-signing-ed25519.pem 读取。" >&2
   exit 3
@@ -164,19 +195,11 @@ python3.11 "${SOURCE_DIR}/scripts/check_documentation.py"
 install -d -o nginx -g nginx -m 0755 /var/www/wechat-memory-license-acme
 install -d -o root -g root -m 0755 /etc/wechat-memory-license
 
-BOOTSTRAP=/etc/nginx/conf.d/wechat-memory-license.conf
-if [[ ! -f "${SOURCE_DIR}/deploy/el9/shared-host-safety.sh" ]]; then
-  echo "源码缺少共享主机安全门禁。" >&2
-  exit 3
-fi
-# shellcheck source=shared-host-safety.sh
-. "${SOURCE_DIR}/deploy/el9/shared-host-safety.sh"
-wkm_assert_owned_nginx_file "${BOOTSTRAP}"
-wkm_assert_no_foreign_nginx_conflict \
-  /etc/nginx "${BOOTSTRAP}" "${PUBLIC_IP}" "${PUBLIC_PORT}"
-NGINX_FOREIGN_BASELINE="$(wkm_foreign_nginx_digest /etc/nginx "${BOOTSTRAP}")"
+NGINX_FOREIGN_PRE_RETIRE_BASELINE=""
+NGINX_FOREIGN_BASELINE=""
 NGINX_CONFIG_SNAPSHOT_TAKEN=0
 NGINX_CONFIG_CHANGED=0
+RETIRED_NGINX_CONFIG_CHANGED=0
 NGINX_WAS_ACTIVE=0
 NGINX_WAS_ENABLED=0
 DEPLOY_COMPLETED=0
@@ -208,10 +231,15 @@ backup_nginx_config() {
 
 restore_nginx_runtime() {
   local failed=0
+  local expected_foreign_baseline="${NGINX_FOREIGN_PRE_RETIRE_BASELINE}"
   set +e
   if (( NGINX_CONFIG_CHANGED )); then
     wkm_tx_restore_file "${APPLICATION_TRANSACTION_DIR}" \
       "${BOOTSTRAP}" nginx-config || failed=1
+  fi
+  if (( RETIRED_NGINX_CONFIG_CHANGED )); then
+    wkm_restore_retired_nginx_conf "${APPLICATION_TRANSACTION_DIR}" \
+      "${RETIRE_NGINX_CONF}" retired-nginx-conf || failed=1
   fi
   if (( NGINX_WAS_ENABLED )); then
     systemctl enable nginx >/dev/null 2>&1 || failed=1
@@ -219,8 +247,9 @@ restore_nginx_runtime() {
     systemctl disable nginx >/dev/null 2>&1 || true
   fi
   if (( NGINX_WAS_ACTIVE )); then
-    if wkm_assert_foreign_nginx_unchanged \
-        "${NGINX_FOREIGN_BASELINE}" /etc/nginx "${BOOTSTRAP}" && nginx -t; then
+    if [[ -n "${expected_foreign_baseline}" ]] && \
+       wkm_assert_foreign_nginx_unchanged \
+        "${expected_foreign_baseline}" /etc/nginx "${BOOTSTRAP}" && nginx -t; then
       systemctl reload nginx || failed=1
     else
       echo "Nginx 部署前配置恢复后未通过校验，无法安全重载。" >&2
@@ -497,17 +526,41 @@ on_deploy_exit() {
 }
 trap on_deploy_exit EXIT
 capture_application_runtime
+
+# The operator may explicitly retire one stopped legacy virtual host that
+# claims this deployment's IP.  Capture both the pre-retirement foreign digest
+# and a byte-exact transaction copy before moving it out of active conf.d.
+# Every later failure restores that file before validating and reloading Nginx.
+NGINX_FOREIGN_PRE_RETIRE_BASELINE="$(
+  wkm_foreign_nginx_digest /etc/nginx "${BOOTSTRAP}"
+)"
+if [[ -n "${RETIRE_NGINX_CONF}" ]]; then
+  # Arm compensation before the helper can move the source file.  If writing
+  # the retirement record itself fails, EXIT still restores the captured file.
+  RETIRED_NGINX_CONFIG_CHANGED=1
+  RETIRE_NGINX_CONF="$(wkm_validate_retire_nginx_conf \
+    "${RETIRE_NGINX_CONF}" "${BOOTSTRAP}" /etc/nginx/conf.d \
+    "${PUBLIC_IP}" "${PUBLIC_PORT}")"
+  wkm_retire_nginx_conf "${APPLICATION_TRANSACTION_DIR}" \
+    "${RETIRE_NGINX_CONF}" \
+    /etc/wechat-memory-license/retired-nginx \
+    retired-nginx-conf "${PUBLIC_IP}" "${PUBLIC_PORT}"
+  echo "已将停用站点移出 active conf.d：${RETIRE_NGINX_CONF}"
+  echo "可恢复备份：${WKM_RETIRED_NGINX_FILE}"
+  wkm_deploy_checkpoint after_nginx_retirement
+fi
+wkm_assert_no_foreign_nginx_conflict \
+  /etc/nginx "${BOOTSTRAP}" "${PUBLIC_IP}" "${PUBLIC_PORT}"
+NGINX_FOREIGN_BASELINE="$(wkm_foreign_nginx_digest /etc/nginx "${BOOTSTRAP}")"
+
 configure_firewall
 configure_selinux
 ACME_ROUTE_VERIFIED=0
 
-if [[ -f "${BOOTSTRAP}" ]] && nginx -t >/dev/null 2>&1; then
-  echo "已存在通过校验的 Nginx 配置，升级期间保持当前 9000 入口。"
-  if ! grep -Eq "server_name[[:space:]]+${PUBLIC_IP//./\\.}[[:space:]]*;" "${BOOTSTRAP}" || \
-     ! grep -Fq '/var/www/wechat-memory-license-acme' "${BOOTSTRAP}"; then
-    echo "已有 WeChatMemory Nginx 配置与当前 --public-ip/ACME webroot 不一致，拒绝猜测覆盖。" >&2
-    exit 4
-  fi
+if [[ -f "${BOOTSTRAP}" ]] && nginx -t >/dev/null 2>&1 && \
+   grep -Eq "server_name[[:space:]]+${PUBLIC_IP//./\\.}[[:space:]]*;" "${BOOTSTRAP}" && \
+   grep -Fq '/var/www/wechat-memory-license-acme' "${BOOTSTRAP}"; then
+  echo "已存在与当前公网 IP 一致的 Nginx 配置，升级期间保持当前 9000 入口。"
   if systemctl is-active --quiet nginx && verify_local_acme_route; then
     ACME_ROUTE_VERIFIED=1
     echo "当前 Nginx 运行态已提供专属 ACME 路由，不执行无需的共享服务 reload。"
@@ -515,8 +568,11 @@ if [[ -f "${BOOTSTRAP}" ]] && nginx -t >/dev/null 2>&1; then
     activate_nginx_configuration
   fi
 else
+  if [[ -f "${BOOTSTRAP}" ]]; then
+    echo "将已确认归属 WeChatMemory 的旧公网 IP 配置迁移到 ${PUBLIC_IP}。"
+  fi
   backup_nginx_config
-  sed "s/104\.224\.90\.172/${PUBLIC_IP}/g" \
+  sed "s/104\.244\.90\.172/${PUBLIC_IP}/g" \
     "${SOURCE_DIR}/deploy/el9/nginx-bootstrap.conf" >"${BOOTSTRAP}.tmp"
   NGINX_CONFIG_CHANGED=1
   install -o root -g root -m 0644 "${BOOTSTRAP}.tmp" "${BOOTSTRAP}"
@@ -554,7 +610,7 @@ if [[ "${TLS_MODE}" == "letsencrypt" ]]; then
     "${SOURCE_DIR}/deploy/el9/certbot-deploy-hook.sh" \
     /usr/local/sbin/wkm-certbot-deploy
   CERTBOT_SERVICE_TMP=/etc/systemd/system/.wechat-memory-certbot-renew.service.tmp
-  sed "s/104\\.224\\.90\\.172/${PUBLIC_IP}/g" \
+  sed "s/104\\.244\\.90\\.172/${PUBLIC_IP}/g" \
     "${SOURCE_DIR}/deploy/el9/wechat-memory-certbot-renew.service" \
     >"${CERTBOT_SERVICE_TMP}"
   install -o root -g root -m 0644 \
@@ -601,9 +657,9 @@ wkm_deploy_checkpoint after_application_install
 
 PRODUCTION_TMP=/etc/nginx/conf.d/.wechat-memory-license.production.tmp
 backup_nginx_config
-sed -e "s#ssl_certificate     /etc/letsencrypt/live/104.224.90.172/fullchain.pem;#ssl_certificate     ${TLS_CERT};#" \
-    -e "s#ssl_certificate_key /etc/letsencrypt/live/104.224.90.172/privkey.pem;#ssl_certificate_key ${TLS_KEY};#" \
-    -e "s/104\.224\.90\.172/${PUBLIC_IP}/g" \
+sed -e "s#ssl_certificate     /etc/letsencrypt/live/104.244.90.172/fullchain.pem;#ssl_certificate     ${TLS_CERT};#" \
+    -e "s#ssl_certificate_key /etc/letsencrypt/live/104.244.90.172/privkey.pem;#ssl_certificate_key ${TLS_KEY};#" \
+    -e "s/104\.244\.90\.172/${PUBLIC_IP}/g" \
     -e "s/listen 9000 ssl;/listen ${PUBLIC_PORT} ssl;/g" \
     -e "s/listen \[::\]:9000 ssl;/listen [::]:${PUBLIC_PORT} ssl;/g" \
     -e "s/X-Forwarded-Port 9000;/X-Forwarded-Port ${PUBLIC_PORT};/g" \
@@ -625,6 +681,10 @@ curl --fail --silent --show-error --connect-timeout 5 --max-time 20 \
 PUBLIC_KEY_JSON="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 20 \
   "https://${PUBLIC_IP}:${PUBLIC_PORT}/v1/keys")"
 
+if (( RETIRED_NGINX_CONFIG_CHANGED )); then
+  wkm_finalize_retired_nginx_conf \
+    "${RETIRE_NGINX_CONF}" "${PUBLIC_IP}" "${PUBLIC_PORT}"
+fi
 DEPLOY_COMPLETED=1
 trap - EXIT ERR
 if [[ -n "${APPLICATION_TRANSACTION_DIR}" ]]; then
@@ -639,4 +699,7 @@ if [[ "${TLS_MODE}" == "letsencrypt" ]]; then
   echo "证书续期定时器：$(systemctl is-enabled wechat-memory-certbot-renew.timer)"
 fi
 echo "签名公钥响应：${PUBLIC_KEY_JSON}"
+if (( RETIRED_NGINX_CONFIG_CHANGED )); then
+  echo "已退役 Nginx 配置的可恢复备份：${WKM_RETIRED_NGINX_DIR}"
+fi
 echo "新增用户：sudo wkm-license-admin add --username <用户名> --plan free"
