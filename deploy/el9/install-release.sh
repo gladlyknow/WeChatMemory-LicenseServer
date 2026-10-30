@@ -32,6 +32,12 @@ if [[ ! -f "${SCRIPT_DIR}/signing-key-safety.sh" ]]; then
 fi
 # shellcheck source=signing-key-safety.sh
 . "${SCRIPT_DIR}/signing-key-safety.sh"
+if [[ ! -f "${SCRIPT_DIR}/release-permissions.sh" ]]; then
+  echo "缺少候选发布权限策略：${SCRIPT_DIR}/release-permissions.sh" >&2
+  exit 3
+fi
+# shellcheck source=release-permissions.sh
+. "${SCRIPT_DIR}/release-permissions.sh"
 if [[ -n "${STAGED_KEY}" ]] && \
    { [[ -e "${STAGED_KEY}" ]] || [[ -L "${STAGED_KEY}" ]]; }; then
   # Validate the first-use source before creating users, directories, release
@@ -71,6 +77,7 @@ install -d -o root -g root -m 0755 "${RELEASE_DIR}"
 
 GIT_TOPLEVEL="$(git -C "${SOURCE_DIR}" rev-parse --show-toplevel 2>/dev/null || true)"
 if [[ "${GIT_TOPLEVEL}" == "${SOURCE_DIR}" ]]; then
+  wkm_assert_git_release_executable_contract "${SOURCE_DIR}"
   # A clean Git object database is a stronger release boundary than copying a
   # worktree: ignored local secrets and databases never enter the stream.
   git -C "${SOURCE_DIR}" archive --format=tar HEAD | \
@@ -102,8 +109,7 @@ else
     --exclude='*.pfx' \
     -cf - . | tar -C "${RELEASE_DIR}" -xf -
 fi
-find "${RELEASE_DIR}" -type d -exec chmod 0755 {} +
-find "${RELEASE_DIR}" -type f -exec chmod 0644 {} +
+wkm_normalize_release_permissions "${RELEASE_DIR}"
 
 REQUIRED_RELEASE_DOCUMENTS=(
   LICENSE
@@ -120,6 +126,7 @@ REQUIRED_RELEASE_DOCUMENTS=(
   docs/SIGNING_KEY_OPERATIONS.md
   docs/DEPLOYMENT_104.244.90.172.md
   deploy/el9/deployment-transaction.sh
+  deploy/el9/release-permissions.sh
   deploy/el9/signing-key-safety.sh
   deploy/el9/shared-host-safety.sh
   deploy/el9/test-deployment-transaction.sh
@@ -190,14 +197,20 @@ cp -a -- "${RELEASE_VENV}" "${RELEASE_TEST_VENV}"
 "${RELEASE_TEST_VENV}/bin/python" -m pip install --no-cache-dir \
   --no-build-isolation --constraint "${REQUIREMENTS_LOCK}" \
   "${RELEASE_DIR}[test]"
+wkm_prepare_root_owned_runtime_venv "${RELEASE_TEST_VENV}" wkm-license
 (
   cd "${RELEASE_DIR}"
   PYTHONWARNINGS=error::SyntaxWarning \
     PYTHONPYCACHEPREFIX="${RELEASE_DIR}/.compile-cache" \
     "${RELEASE_VENV}/bin/python" -m compileall -q \
       license_server register_user.py license_admin.py scripts tests
-  PYTHONDONTWRITEBYTECODE=1 "${RELEASE_TEST_VENV}/bin/python" -m pytest \
-    -q -p no:cacheprovider tests
+  # Candidate tests must never inherit root's ability to mutate the host if a
+  # command shim regresses.  The service account can read the immutable
+  # candidate and writes test state only beneath its own temporary directory.
+  /usr/sbin/runuser -u wkm-license -- /usr/bin/env \
+    PYTHONDONTWRITEBYTECODE=1 \
+    "${RELEASE_TEST_VENV}/bin/python" -m pytest \
+      -q -p no:cacheprovider tests
   bash -n deploy/el9/*.sh deploy/el9/wkm-license-admin
   bash deploy/el9/test-deployment-transaction.sh
 )
@@ -232,6 +245,17 @@ fi
     --path "${KEY_SOURCE}" --key-id "${KEY_ID}" \
     --manifest "${MANIFEST_PATH}" >/dev/null
 )
+# No root process writes to the production venv after this point.  Prepare it
+# only now so later migration and systemd execution can use the interpreter as
+# wkm-license without granting that account ownership or write access.
+wkm_prepare_root_owned_runtime_venv "${RELEASE_VENV}" wkm-license
+if ! /usr/sbin/runuser -u wkm-license -- /usr/bin/env \
+  PYTHONDONTWRITEBYTECODE=1 \
+  "${RELEASE_VENV}/bin/python" -c \
+  'import license_server; assert license_server.__version__'; then
+  echo "wkm-license 无法读取或执行候选 Python venv，拒绝进入 migration。" >&2
+  exit 3
+fi
 if [[ ! -f "${KEY_PATH}" ]]; then
   install -o root -g wkm-license -m 0640 "${KEY_SOURCE}" "${KEY_PATH}"
 fi

@@ -180,9 +180,9 @@ sudo bash deploy/el9/one-click-deploy.sh \
 4. 在唯一的活动 firewalld zone 中精确增加规则（不全量 reload），配置 SELinux 和专属 ACME webroot；SELinux 为 Disabled 时完全跳过 `semanage`/`getsebool`/`setsebool`，为 Enforcing 或 Permissive 时先只读整张端口类型表，确认端口未分配才新增；已属于非 `http_port_t` 类型则失败关闭；
 5. 申请包含 `104.244.90.172` IP SAN 的受信任短期证书；
 6. 安装每四小时运行、只续期本 IP 证书的专属定时器；
-7. 创建不可变候选 release 源码目录；
+7. 创建不可变候选 release 源码目录；无论来自 Git 还是上传包，目录统一为 `0755`、普通文件统一为 `0644`，仅审计白名单中与 Git `100755` 完全一致的入口恢复 `0755`；目标缺失、出现符号链接或清单漂移均失败关闭；
 8. 对旧库创建并校验 SQLite 一致备份；
-9. 在候选 release 内扫描私钥标记，建立独立 `.venv`，验证依赖闭包与精确 SBOM，强制执行严格编译、服务端全测、全部 EL9 Shell 语法和部署事务自测，校验签名私钥后再执行 SQLite init/migration；
+9. 在候选 release 内扫描私钥标记，建立独立 `.venv`，验证依赖闭包与精确 SBOM，强制执行严格编译、服务端全测、全部 EL9 Shell 语法和部署事务自测；生产 venv 和一次性测试 venv 都保持 `root` owner，仅把 group 设为 `wkm-license` 并授予 `g+rX,o-rwx`，运行账号无写权；pytest 固定以无登录权限的 `wkm-license` 账号运行，测试替身即使失效也无权改写主机；校验签名私钥后再执行 SQLite init/migration；
 10. 安装 systemd 单元和每日备份定时器，原子切换 `current`，启动授权服务并通过本机 `/readyz/deep`；
 11. 切换 Nginx 生产配置，验证公网 HTTPS、证书 SAN、`/readyz` 和签名公钥接口。
 

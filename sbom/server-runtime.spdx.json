@@ -11,7 +11,7 @@
   "documentDescribes": [
     "SPDXRef-Package-wechat-memory-license-server"
   ],
-  "documentNamespace": "https://github.com/gladlyknow/WeChatMemory-LicenseServer/spdx/0.2.4/cef64a58b1df546facf532276cfbefb4ccf0ec317c5e59ca9d7e70dda1c72ae5",
+  "documentNamespace": "https://github.com/gladlyknow/WeChatMemory-LicenseServer/spdx/0.2.5/b344a65c183d080fd15be915992dbf4cc46a5a2e14870e5d12fd732978ecc577",
   "hasExtractedLicensingInfos": [
     {
       "comment": "Engineering release baseline; human legal review remains required.",
@@ -20,7 +20,7 @@
       "name": "WeChatMemory License Server Proprietary Software License"
     }
   ],
-  "name": "wechat-memory-license-server-0.2.4-runtime",
+  "name": "wechat-memory-license-server-0.2.5-runtime",
   "packages": [
     {
       "SPDXID": "SPDXRef-Package-wechat-memory-license-server",
@@ -32,7 +32,7 @@
       "licenseDeclared": "LicenseRef-WeChatMemory-License-Server-Proprietary",
       "name": "wechat-memory-license-server",
       "primaryPackagePurpose": "APPLICATION",
-      "versionInfo": "0.2.4"
+      "versionInfo": "0.2.5"
     },
     {
       "SPDXID": "SPDXRef-Package-blinker",

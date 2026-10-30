@@ -1,6 +1,6 @@
 # WeChatMemory 授权服务原理、接口与运维设计
 
-> 基线：License Server `0.2.4` / Client `0.3.4`
+> 基线：License Server `0.2.5` / Client `0.3.4`
 > 公网入口：`https://104.244.90.172:9000`
 > 存储：单机 SQLite3，客户聊天数据不上云。
 > 文档导航见 [`README.md`](README.md)，生产操作见
@@ -199,7 +199,8 @@ Waitress 的监听地址固定在 systemd 单元的 `127.0.0.1:9100`，不由 `s
 2. 只把已审核变更提交到 `main`；服务器 `/data/WeChatMemory-LicenseServer` 保持干净。
 3. 运行 `deploy/el9/deploy-from-data.sh`；它执行 fast-forward、SQLite `.backup`、完整性检查、
    不可变 release 创建、`requirements.lock` 精确约束、release 内独立 `.venv` 安装、
-   SBOM/全测/严格编译/Shell/事务门禁、migration ledger 原生 SQL/旧库结构合同 SHA-256 校验、
+   确定性候选权限白名单、`root:wkm-license` 且组只读可执行的 venv、以 `wkm-license` 非 root 运行的 SBOM/全测、严格编译/Shell/事务门禁、
+   migration ledger 原生 SQL/旧库结构合同 SHA-256 校验、
    `current` 原子切换和 systemd 重启。
 4. 候选服务启动、本机 `/readyz/deep`、Nginx 切换或公网验收失败时，补偿事务恢复
    `current`、`service.env`、systemd 单元/服务状态、Nginx 配置/服务状态，以及 existing 模式

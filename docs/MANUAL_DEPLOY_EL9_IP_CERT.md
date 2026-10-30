@@ -374,7 +374,7 @@ sudo bash deploy/el9/install-release.sh \
 
 1. 创建 `wkm-license` 用户和受限目录，复制不可变 release 源码并验证文档契约；
 2. 升级时使用 SQLite `.backup` 创建并校验完整备份；
-3. 拒绝含私钥标记的候选包，在 release 内建立独立 Python 3.11 `.venv`，安装依赖、检查依赖闭包、对比精确 SPDX SBOM，并通过严格编译、服务端全测、全部 EL9 Shell 语法与部署事务自测；
+3. 拒绝含私钥标记的候选包，将候选树权限归一为目录 `0755`/普通文件 `0644`，仅恢复经审计且与 Git `100755` 精确一致的可执行白名单；在 release 内建立独立 Python 3.11 `.venv`，安装依赖、检查依赖闭包、对比精确 SPDX SBOM；venv 保持 `root:wkm-license`、`g+rX,o-rwx` 且组不可写，并以 `wkm-license` 非 root 账号通过服务端全测，同时完成严格编译、全部 EL9 Shell 语法与部署事务自测；
 4. 校验跟踪的公钥清单，把私钥安装到 `/etc/wechat-memory-license/signing-ed25519-2026-10-30.pem`；
 5. 快照当前应用运行态，写入候选 `service.env`，再初始化或迁移 SQLite schema 和套餐；
 6. 安装 systemd unit，原子切换 `current`，启动后检查仅本机可访问的 `/readyz/deep`。

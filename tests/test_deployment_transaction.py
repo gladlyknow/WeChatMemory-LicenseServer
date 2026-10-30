@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
+import stat
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -40,6 +43,40 @@ class DeploymentTransactionTests(unittest.TestCase):
         self.assertIn('--check "${RELEASE_DIR}/sbom/server-runtime.spdx.json"', installer)
         self.assertIn('cd "${RELEASE_DIR}"', installer)
         self.assertIn('"${RELEASE_TEST_VENV}/bin/python" -m pytest', installer)
+        self.assertIn(
+            "/usr/sbin/runuser -u wkm-license -- /usr/bin/env", installer
+        )
+        self.assertEqual(
+            installer.count("wkm_prepare_root_owned_runtime_venv"), 2
+        )
+        runtime_permissions = installer.index(
+            'wkm_prepare_root_owned_runtime_venv "${RELEASE_VENV}" wkm-license'
+        )
+        test_copy = installer.index(
+            'cp -a -- "${RELEASE_VENV}" "${RELEASE_TEST_VENV}"'
+        )
+        test_permissions = installer.index(
+            'wkm_prepare_root_owned_runtime_venv "${RELEASE_TEST_VENV}" wkm-license'
+        )
+        unprivileged_tests = installer.index(
+            "/usr/sbin/runuser -u wkm-license -- /usr/bin/env"
+        )
+        signing_verification = installer.index(
+            '"${RELEASE_VENV}/bin/python" -m license_server signing-key verify'
+        )
+        runtime_probe = installer.index(
+            "import license_server; assert license_server.__version__"
+        )
+        migration = installer.index("DATABASE_MIGRATION_ATTEMPTED=1")
+        self.assertLess(test_copy, test_permissions)
+        self.assertLess(test_permissions, unprivileged_tests)
+        self.assertLess(unprivileged_tests, signing_verification)
+        self.assertLess(signing_verification, runtime_permissions)
+        self.assertLess(runtime_permissions, runtime_probe)
+        self.assertLess(runtime_probe, migration)
+        self.assertIn(
+            '"${RELEASE_VENV}/bin/python" -c', installer[runtime_permissions:runtime_probe]
+        )
         self.assertIn("PYTHONWARNINGS=error::SyntaxWarning", installer)
         self.assertIn("bash -n deploy/el9/*.sh deploy/el9/wkm-license-admin", installer)
         self.assertIn("bash deploy/el9/test-deployment-transaction.sh", installer)
@@ -52,6 +89,150 @@ class DeploymentTransactionTests(unittest.TestCase):
         self.assertIn(
             "PYTHON=/opt/wechat-memory-license/current/.venv/bin/python", admin
         )
+
+    def test_release_permission_policy_is_deterministic_and_fail_closed(self) -> None:
+        policy = ROOT / "deploy/el9/release-permissions.sh"
+        expected_executables = {
+            "deploy/el9/backup-database.sh",
+            "deploy/el9/deploy-from-data.sh",
+            "deploy/el9/deployment-transaction.sh",
+            "deploy/el9/install-release.sh",
+            "deploy/el9/one-click-deploy.sh",
+            "deploy/el9/test-deployment-transaction.sh",
+            "deploy/el9/wkm-license-admin",
+            "register_user.py",
+            "scripts/check_documentation.py",
+            "tests/fixtures/ip-command-shim.sh",
+            "tests/fixtures/selinux-command-shim.sh",
+        }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            release = Path(temporary) / "release"
+            release.mkdir()
+            ordinary = release / "ordinary.txt"
+            ordinary.write_text("ordinary\n", encoding="utf-8")
+            ordinary.chmod(0o777)
+            for relative in expected_executables:
+                path = release / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                path.chmod(0o600)
+
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    'source "$1"; wkm_normalize_release_permissions "$2"',
+                    "bash",
+                    str(policy),
+                    str(release),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(stat.S_IMODE(ordinary.stat().st_mode), 0o644)
+            self.assertTrue(
+                all(
+                    stat.S_IMODE((release / path).stat().st_mode) == 0o755
+                    for path in expected_executables
+                )
+            )
+
+            # Replacing any allow-listed entry with a symlink must fail rather
+            # than chmod an external target.
+            victim = release / "register_user.py"
+            victim.unlink()
+            victim.symlink_to(ordinary)
+            ordinary.chmod(0o644)
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    'source "$1"; wkm_normalize_release_permissions "$2"',
+                    "bash",
+                    str(policy),
+                    str(release),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(stat.S_IMODE(ordinary.stat().st_mode), 0o644)
+
+        if (ROOT / ".git").is_dir():
+            tracked = subprocess.run(
+                ["git", "ls-files", "--stage"],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.splitlines()
+            tracked_executables = {
+                line.split("\t", 1)[1]
+                for line in tracked
+                if line.startswith("100755 ")
+            }
+            self.assertEqual(tracked_executables, expected_executables)
+
+        # The helper's public list is the same contract for Git archives and
+        # uploaded bundles, independent of their incoming mode bits.
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                'source "$1"; wkm_release_executable_paths',
+                "bash",
+                str(policy),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(set(result.stdout.splitlines()), expected_executables)
+
+    def test_runtime_venv_permission_contract_rejects_writable_group(self) -> None:
+        policy = ROOT / "deploy/el9/release-permissions.sh"
+        with tempfile.TemporaryDirectory() as temporary:
+            venv = Path(temporary) / "venv"
+            executable = venv / "bin/python"
+            package = venv / "lib/site-packages/example.py"
+            executable.parent.mkdir(parents=True)
+            package.parent.mkdir(parents=True)
+            executable.write_text("#!/bin/sh\n", encoding="utf-8")
+            package.write_text("VALUE = 1\n", encoding="utf-8")
+            for directory in (venv, executable.parent, package.parent.parent, package.parent):
+                directory.chmod(0o750)
+            executable.chmod(0o750)
+            package.chmod(0o640)
+
+            arguments = [
+                "bash",
+                "-c",
+                'source "$1"; wkm_assert_runtime_venv_permissions "$2" "$3" "$4"',
+                "bash",
+                str(policy),
+                str(venv),
+                str(os.getuid()),
+                str(os.getgid()),
+            ]
+            result = subprocess.run(
+                arguments, check=False, capture_output=True, text=True
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            package.chmod(0o660)
+            result = subprocess.run(
+                arguments, check=False, capture_output=True, text=True
+            )
+            self.assertNotEqual(result.returncode, 0)
+
+        policy_text = policy.read_text(encoding="utf-8")
+        self.assertIn('-exec chown 0:"${runtime_group_id}" -- {} +', policy_text)
+        self.assertIn('chmod -R u=rwX,g=rX,o= "${venv_dir}"', policy_text)
+        self.assertNotIn("chown -R wkm-license", policy_text)
 
     def test_runtime_configuration_contains_only_consumed_settings(self) -> None:
         installer = (ROOT / "deploy/el9/install-release.sh").read_text(

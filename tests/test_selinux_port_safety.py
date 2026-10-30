@@ -35,7 +35,13 @@ class SelinuxPortSafetyTests(unittest.TestCase):
                 "setsebool",
                 "restorecon",
             ):
-                (command_dir / name).symlink_to(COMMAND_SHIM)
+                # The release allow-list restores this tracked fixture to 0755,
+                # while per-command 0700 copies add a second isolation layer.
+                # If an input mode regresses, PATH still cannot fall through to
+                # real host SELinux tools during candidate validation.
+                command_shim = command_dir / name
+                command_shim.write_bytes(COMMAND_SHIM.read_bytes())
+                command_shim.chmod(0o700)
 
             environment = os.environ.copy()
             environment.update(

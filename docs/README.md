@@ -68,6 +68,8 @@ git status --short
 上述 `/opt/wechat-memory-license/current/.venv` 是当前 release 自己的独立环境；每个候选 release
 必须使用自己的 `.venv` 做测试和 SBOM 比对，不能污染正在运行的版本。首次部署前，完整单元测试必须在
 开发/发布机的项目 `.venv` 中完成；目标 EL9 上的无依赖文档门禁固定使用 `python3.11`。
+候选树的可执行位不信任压缩包元数据：发布器强制应用审计白名单，并且以 `wkm-license`
+非 root 账号运行 pytest。权限白名单、Git `100755` 模式或测试身份任一变更都必须重跑完整发布门禁。
 
 `deploy-from-data.sh` 会拒绝非 `main` 分支和非干净工作树。有未提交的文档或代码时，
 脚本拒绝生产部署是正常的安全行为。

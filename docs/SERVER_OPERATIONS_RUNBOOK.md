@@ -121,7 +121,7 @@ sudo bash deploy/el9/deploy-from-data.sh
 `HEAD` 创建新 release，再次校验 release 内文档，然后通过 SQLite `.backup` 生成并校验
 一致备份。备份成功后，发布器先拒绝含标准私钥标记的候选包，再以 `requirements.lock` 约束精确版本，
 只在候选 release 的 `.venv` 中安装依赖，验证依赖闭包与精确 SBOM、
-严格编译、服务端全测、全部 EL9 Shell 语法和部署事务自测，再校验签名私钥。所有门禁通过后才写入候选配置、
+严格编译、服务端全测、全部 EL9 Shell 语法和部署事务自测，再校验签名私钥。候选树先被强制归一为目录 `0755`/普通文件 `0644`，只有审计白名单且与 Git `100755` 模式完全一致的入口可执行；上传包也使用同一白名单。两个 venv 都由 `root` 持有且不允许组写，只向 `wkm-license` 组开放读取/遍历/执行；pytest 由 `wkm-license` 非 root 运行，不继承 root 的主机修改能力。所有门禁通过后才写入候选配置、
 执行 migration；migration ledger 会校验原生 SQL 的名称/SHA-256；pre-ledger 旧库只有在通过版本化
 最低结构合同后，才记录显式 adoption 名称和合同 SHA-256。随后原子切换
 `current`、重启服务并检查仅本机可访问的 `/readyz/deep`。当前版本的依赖不会被候选版本污染。

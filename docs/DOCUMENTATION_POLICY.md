@@ -2,7 +2,7 @@
 
 > 基线日期：2026-10-30
 > 客户端：`WeChatMemory-Client 0.3.4`
-> 授权服务端：`WeChatMemory-LicenseServer 0.2.4`
+> 授权服务端：`WeChatMemory-LicenseServer 0.2.5`
 > 授权协议：`v1`；服务端 SQLite schema：`3`；公钥清单 schema：`1`
 
 本文是客户端与授权服务端协同发布的入口。它说明两个仓库的边界、部署顺序、版本与信任根检查，
@@ -194,7 +194,7 @@ VERSION=0.3.4 ./packaging/linux/build.sh
 |---|---|---|---|
 | 客户端 | `0.3.4` | Windows 10/11 x64；Ubuntu/Linux x86_64 | Windows 为 NativeCandidate，须实机验收 |
 | Windows 微信 | 4.x 读取框架 | 取钥门禁目前精确信任腾讯签名的 `Weixin.exe 4.1.0.34` 指定哈希 | 其他版本必须新增证据和门禁，不能默认放行 |
-| 授权服务端 | `0.2.4` | Enterprise Linux 9、Python 3.11、单主 SQLite | 手工部署 |
+| 授权服务端 | `0.2.5` | Enterprise Linux 9、Python 3.11、单主 SQLite | 手工部署 |
 | 公网接口 | `/v1/*` | HTTPS `104.244.90.172:9000`；内部 `127.0.0.1:9100` | 禁止 HTTP 降级 |
 | 授权协议 | `v1` | `issuer=wechat-memory-license`、`audience=wechat-memory-client` | 未知 `key_id` 失败关闭 |
 | 服务端数据库 | schema `3` | 顺序 migration；终态 refresh session 有界清理；部署前后均需备份、廉价 `readyz` 和 loopback `readyz/deep` | SQLite WAL 单主 |

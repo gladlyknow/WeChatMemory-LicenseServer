@@ -27,7 +27,14 @@ class PublicIpSafetyTests(unittest.TestCase):
             command_dir.mkdir()
             calls = root / "calls.log"
             calls.touch()
-            (command_dir / "ip").symlink_to(COMMAND_SHIM)
+            # The release permission policy currently restores the tracked
+            # fixture to 0755, but each test still installs a private 0700 copy
+            # as defence in depth.  This prevents PATH from falling through to
+            # the host's real ``ip`` if archive metadata or the source fixture
+            # ever arrives without an execute bit.
+            command_shim = command_dir / "ip"
+            command_shim.write_bytes(COMMAND_SHIM.read_bytes())
+            command_shim.chmod(0o700)
             environment = os.environ.copy()
             environment.update(
                 {
