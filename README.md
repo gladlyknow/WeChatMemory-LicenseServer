@@ -14,6 +14,7 @@
 
 ## 当前生产部署基线
 
+- 服务端：`0.2.3`，SQLite schema `3`
 - 服务器：`104.224.90.172`
 - 公网 Web/API：`https://104.224.90.172:9000`
 - 内部应用：`127.0.0.1:9100`，不对公网开放
@@ -32,13 +33,17 @@
 [`docs/SERVER_OPERATIONS_RUNBOOK.md`](docs/SERVER_OPERATIONS_RUNBOOK.md)。
 文档与代码同版发布的必修规则见
 [`docs/DOCUMENTATION_POLICY.md`](docs/DOCUMENTATION_POLICY.md)。
+proprietary 工程许可基线、第三方依赖来源、离线 SPDX 生成和正式商用前人工法律门禁见
+[`LICENSE`](LICENSE)、[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) 和
+[`docs/LEGAL_AND_SBOM_RELEASE_GATE.md`](docs/LEGAL_AND_SBOM_RELEASE_GATE.md)。
 生产签名密钥的生成、幂等发布、客户端信任根同步、备份恢复和轮换见
 [`docs/SIGNING_KEY_OPERATIONS.md`](docs/SIGNING_KEY_OPERATIONS.md)。
 目标服务器的标准源码目录是 `/data/WeChatMemory-LicenseServer`，可从该目录执行
 `deploy/el9/deploy-from-data.sh`；证书通知邮箱默认为 `gladlygrady@tutamail.com`。
 
-本仓库是独立商业实现的起点。正式版权声明、EULA 和隐私政策须在权利链审计和法律复核后加入；
-当前不从 GPL 原型仓库复制客户端实现。
+本仓库是独立商业实现的起点。根 `LICENSE` 是 proprietary 工程发布基线，不代表法律已批准。
+客户 EULA、隐私政策和属地商业条款仍须在权利链审计和人工法律复核后定稿；当前不从 GPL 原型仓库
+复制客户端实现。
 
 ## 初始化数据库
 
@@ -123,6 +128,35 @@ bash -n deploy/el9/*.sh deploy/el9/wkm-license-admin
 ```bash
 python scripts/check_documentation.py
 ```
+
+精确运行时依赖与许可证元数据校验（从当前虚拟环境读取，不访问外网）：
+
+```bash
+python scripts/generate_sbom.py --validate sbom/server-runtime.spdx.json
+python scripts/generate_sbom.py --check sbom/server-runtime.spdx.json
+```
+
+第二条命令必须在候选 release 自己的虚拟环境中执行。它检查实际安装的直接和传递依赖，不接受仅有
+版本范围的声明。通过自动化只代表工程候选与已评审基线一致；正式商用仍要求法务/合规人员签字。
+
+## 刷新会话保留策略
+
+成功刷新会把旧 token 标记为 `rotated`，设备解绑等操作会把会话标记为 `revoked`。这两类终态行默认
+保留 90 天用于重放检测和安全审计，然后由每日备份服务在“备份已完成且完整性通过”之后按固定批次
+删除。`active`、`expired`、未到保留期或缺少终态时间戳的行永不被该任务删除。
+
+手工执行同一有界维护命令：
+
+```bash
+sudo wkm-license-admin --json prune-refresh-sessions \
+  --retention-days 90 \
+  --batch-size 500 \
+  --max-batches 20
+```
+
+一次命令最多处理 `batch-size × max-batches` 条，API 请求路径不会扫描或清理历史会话。完整原理、
+定时参数和验收命令见[服务端架构](docs/LICENSE_SERVER_ARCHITECTURE.md)与
+[统一运维手册](docs/SERVER_OPERATIONS_RUNBOOK.md)。
 
 ## 本地 API 启动（仅开发）
 

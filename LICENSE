@@ -1,0 +1,42 @@
+WeChatMemory License Server Proprietary Software License
+Engineering Release Baseline 1.0, 2026-10-30
+
+Copyright (c) 2026 WeChatMemory. All rights reserved.
+
+1. The source code, object code, database schema, deployment material,
+   documentation, visual assets and related materials in this repository are
+   proprietary and confidential. No right to use, copy, modify, disclose or
+   distribute them is granted except by a separate written commercial
+   agreement issued by the copyright owner.
+
+2. An authorized operator may install and operate a distributed server build
+   only for the accounts, infrastructure, environments, term and purposes
+   permitted by the applicable written agreement. Running a publicly reachable
+   licensing endpoint does not grant any third party a right to the server
+   software or its source code.
+
+3. Redistribution, sublicensing, sale, publication, unauthorized hosting,
+   reverse engineering, circumvention of entitlement or device controls, and
+   creation of derivative products are prohibited except where applicable law
+   does not permit such restriction or a separate written agreement expressly
+   allows it.
+
+4. The license service is designed to receive only the minimum account,
+   entitlement, installation and anonymous device data required for licensing.
+   Customer chat content, media, WeChat database keys, contacts and search
+   terms are outside the authorized server data boundary and must not be added
+   without a separately reviewed product and privacy change.
+
+5. Third-party components remain governed by their respective licenses and
+   notices. This license does not replace, restrict or expand those third-party
+   terms. The release SBOM and THIRD_PARTY_NOTICES.md form part of the
+   engineering release evidence.
+
+6. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, TO THE
+   MAXIMUM EXTENT PERMITTED BY LAW. IN NO EVENT SHALL THE COPYRIGHT OWNER BE
+   LIABLE FOR INDIRECT, INCIDENTAL, SPECIAL OR CONSEQUENTIAL DAMAGES.
+
+7. This text is an engineering release baseline only. It is not a statement
+   that legal review has been completed and is not a substitute for
+   jurisdiction-specific counsel, a customer EULA, privacy notice, data
+   processing terms, export-control review or commercial contract.

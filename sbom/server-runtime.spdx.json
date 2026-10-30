@@ -1,0 +1,331 @@
+{
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "creationInfo": {
+    "created": "2026-10-30T07:38:09Z",
+    "creators": [
+      "Organization: WeChatMemory",
+      "Tool: scripts/generate_sbom.py"
+    ]
+  },
+  "dataLicense": "CC0-1.0",
+  "documentDescribes": [
+    "SPDXRef-Package-wechat-memory-license-server"
+  ],
+  "documentNamespace": "https://github.com/gladlyknow/WeChatMemory-LicenseServer/spdx/0.2.3/3cbddefb1d5e8a6f1875790f99f6b5605a4f743eacf6db807622165e49c574cd",
+  "hasExtractedLicensingInfos": [
+    {
+      "comment": "Engineering release baseline; human legal review remains required.",
+      "extractedText": "WeChatMemory License Server Proprietary Software License\nEngineering Release Baseline 1.0, 2026-10-30\n\nCopyright (c) 2026 WeChatMemory. All rights reserved.\n\n1. The source code, object code, database schema, deployment material,\n   documentation, visual assets and related materials in this repository are\n   proprietary and confidential. No right to use, copy, modify, disclose or\n   distribute them is granted except by a separate written commercial\n   agreement issued by the copyright owner.\n\n2. An authorized operator may install and operate a distributed server build\n   only for the accounts, infrastructure, environments, term and purposes\n   permitted by the applicable written agreement. Running a publicly reachable\n   licensing endpoint does not grant any third party a right to the server\n   software or its source code.\n\n3. Redistribution, sublicensing, sale, publication, unauthorized hosting,\n   reverse engineering, circumvention of entitlement or device controls, and\n   creation of derivative products are prohibited except where applicable law\n   does not permit such restriction or a separate written agreement expressly\n   allows it.\n\n4. The license service is designed to receive only the minimum account,\n   entitlement, installation and anonymous device data required for licensing.\n   Customer chat content, media, WeChat database keys, contacts and search\n   terms are outside the authorized server data boundary and must not be added\n   without a separately reviewed product and privacy change.\n\n5. Third-party components remain governed by their respective licenses and\n   notices. This license does not replace, restrict or expand those third-party\n   terms. The release SBOM and THIRD_PARTY_NOTICES.md form part of the\n   engineering release evidence.\n\n6. THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, TO THE\n   MAXIMUM EXTENT PERMITTED BY LAW. IN NO EVENT SHALL THE COPYRIGHT OWNER BE\n   LIABLE FOR INDIRECT, INCIDENTAL, SPECIAL OR CONSEQUENTIAL DAMAGES.\n\n7. This text is an engineering release baseline only. It is not a statement\n   that legal review has been completed and is not a substitute for\n   jurisdiction-specific counsel, a customer EULA, privacy notice, data\n   processing terms, export-control review or commercial contract.\n",
+      "licenseId": "LicenseRef-WeChatMemory-License-Server-Proprietary",
+      "name": "WeChatMemory License Server Proprietary Software License"
+    }
+  ],
+  "name": "wechat-memory-license-server-0.2.3-runtime",
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Package-wechat-memory-license-server",
+      "comment": "{\"dependency_scope\":\"application\"}",
+      "copyrightText": "Copyright (c) 2026 WeChatMemory. All rights reserved.",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "LicenseRef-WeChatMemory-License-Server-Proprietary",
+      "licenseDeclared": "LicenseRef-WeChatMemory-License-Server-Proprietary",
+      "name": "wechat-memory-license-server",
+      "primaryPackagePurpose": "APPLICATION",
+      "versionInfo": "0.2.3"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-blinker",
+      "comment": "{\"dependency_scope\":\"transitive\",\"license_metadata\":{\"license\":[],\"license_classifiers\":[\"License :: OSI Approved :: MIT License\"],\"license_expression\":[],\"license_files\":[]}}",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/blinker@1.9.0",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "homepage": "https://github.com/pallets-eco/blinker/",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "name": "blinker",
+      "primaryPackagePurpose": "LIBRARY",
+      "versionInfo": "1.9.0"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-cffi",
+      "comment": "{\"dependency_scope\":\"transitive\",\"license_metadata\":{\"license\":[],\"license_classifiers\":[],\"license_expression\":[\"MIT-0\"],\"license_files\":[\"LICENSE\"]}}",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/cffi@2.1.1",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "homepage": "https://github.com/python-cffi/cffi",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT-0",
+      "name": "cffi",
+      "primaryPackagePurpose": "LIBRARY",
+      "versionInfo": "2.1.1"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-click",
+      "comment": "{\"dependency_scope\":\"transitive\",\"license_metadata\":{\"license\":[],\"license_classifiers\":[],\"license_expression\":[\"BSD-3-Clause\"],\"license_files\":[\"LICENSE.txt\"]}}",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/click@8.5.0",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "homepage": "https://github.com/pallets/click/",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "name": "click",
+      "primaryPackagePurpose": "LIBRARY",
+      "versionInfo": "8.5.0"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-cryptography",
+      "comment": "{\"dependency_scope\":\"direct\",\"license_metadata\":{\"license\":[],\"license_classifiers\":[],\"license_expression\":[\"Apache-2.0 OR BSD-3-Clause\"],\"license_files\":[\"LICENSE\",\"LICENSE.APACHE\",\"LICENSE.BSD\"]}}",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/cryptography@46.0.7",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "homepage": "https://github.com/pyca/cryptography",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0 OR BSD-3-Clause",
+      "name": "cryptography",
+      "primaryPackagePurpose": "LIBRARY",
+      "versionInfo": "46.0.7"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-flask",
+      "comment": "{\"dependency_scope\":\"direct\",\"license_metadata\":{\"license\":[],\"license_classifiers\":[],\"license_expression\":[\"BSD-3-Clause\"],\"license_files\":[\"LICENSE.txt\"]}}",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/flask@3.1.3",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "homepage": "https://github.com/pallets/flask/",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "name": "Flask",
+      "primaryPackagePurpose": "LIBRARY",
+      "versionInfo": "3.1.3"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-itsdangerous",
+      "comment": "{\"dependency_scope\":\"transitive\",\"license_metadata\":{\"license\":[],\"license_classifiers\":[\"License :: OSI Approved :: BSD License\"],\"license_expression\":[],\"license_files\":[]}}",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/itsdangerous@2.2.0",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "homepage": "https://github.com/pallets/itsdangerous/",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "name": "itsdangerous",
+      "primaryPackagePurpose": "LIBRARY",
+      "versionInfo": "2.2.0"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-jinja2",
+      "comment": "{\"dependency_scope\":\"transitive\",\"license_metadata\":{\"license\":[],\"license_classifiers\":[\"License :: OSI Approved :: BSD License\"],\"license_expression\":[],\"license_files\":[\"LICENSE.txt\"]}}",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/jinja2@3.1.6",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "homepage": "https://github.com/pallets/jinja/",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "name": "Jinja2",
+      "primaryPackagePurpose": "LIBRARY",
+      "versionInfo": "3.1.6"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-markupsafe",
+      "comment": "{\"dependency_scope\":\"transitive\",\"license_metadata\":{\"license\":[],\"license_classifiers\":[],\"license_expression\":[\"BSD-3-Clause\"],\"license_files\":[\"LICENSE.txt\"]}}",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/markupsafe@3.0.4",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "homepage": "https://github.com/pallets/markupsafe/",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "name": "MarkupSafe",
+      "primaryPackagePurpose": "LIBRARY",
+      "versionInfo": "3.0.4"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pycparser",
+      "comment": "{\"dependency_scope\":\"transitive\",\"license_metadata\":{\"license\":[],\"license_classifiers\":[],\"license_expression\":[\"BSD-3-Clause\"],\"license_files\":[\"LICENSE\"]}}",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/pycparser@3.11",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "homepage": "https://github.com/eliben/pycparser",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "name": "pycparser",
+      "primaryPackagePurpose": "LIBRARY",
+      "versionInfo": "3.11"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-waitress",
+      "comment": "{\"dependency_scope\":\"direct\",\"license_metadata\":{\"license\":[\"ZPL 2.1\"],\"license_classifiers\":[\"License :: OSI Approved :: Zope Public License\"],\"license_expression\":[],\"license_files\":[\"LICENSE.txt\"]}}",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/waitress@3.0.2",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "homepage": "https://github.com/Pylons/waitress",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ZPL-2.1",
+      "name": "waitress",
+      "primaryPackagePurpose": "LIBRARY",
+      "versionInfo": "3.0.2"
+    },
+    {
+      "SPDXID": "SPDXRef-Package-werkzeug",
+      "comment": "{\"dependency_scope\":\"transitive\",\"license_metadata\":{\"license\":[],\"license_classifiers\":[],\"license_expression\":[\"BSD-3-Clause\"],\"license_files\":[\"LICENSE.txt\"]}}",
+      "copyrightText": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceLocator": "pkg:pypi/werkzeug@3.1.9",
+          "referenceType": "purl"
+        }
+      ],
+      "filesAnalyzed": false,
+      "homepage": "https://github.com/pallets/werkzeug/",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "name": "Werkzeug",
+      "primaryPackagePurpose": "LIBRARY",
+      "versionInfo": "3.1.9"
+    }
+  ],
+  "relationships": [
+    {
+      "relatedSpdxElement": "SPDXRef-Package-wechat-memory-license-server",
+      "relationshipType": "DESCRIBES",
+      "spdxElementId": "SPDXRef-DOCUMENT"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-pycparser",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-cffi"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-cffi",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-cryptography"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-blinker",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-flask"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-click",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-flask"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-itsdangerous",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-flask"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-jinja2",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-flask"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-markupsafe",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-flask"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-werkzeug",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-flask"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-markupsafe",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-jinja2"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-cryptography",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-wechat-memory-license-server"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-flask",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-wechat-memory-license-server"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-waitress",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-wechat-memory-license-server"
+    },
+    {
+      "relatedSpdxElement": "SPDXRef-Package-markupsafe",
+      "relationshipType": "DEPENDS_ON",
+      "spdxElementId": "SPDXRef-Package-werkzeug"
+    }
+  ],
+  "spdxVersion": "SPDX-2.3"
+}

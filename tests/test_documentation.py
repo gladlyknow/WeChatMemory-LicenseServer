@@ -73,15 +73,21 @@ class DocumentationContractTests(unittest.TestCase):
         )
         self.assertIn("REQUIRED_RELEASE_DOCUMENTS", installer)
         self.assertIn("docs/DOCUMENTATION_POLICY.md", installer)
+        self.assertIn("docs/LEGAL_AND_SBOM_RELEASE_GATE.md", installer)
+        self.assertIn("sbom/server-runtime.spdx.json", installer)
+        self.assertIn("scripts/generate_sbom.py", installer)
+        self.assertIn("deploy/el9/deployment-transaction.sh", installer)
+        self.assertIn("deploy/el9/shared-host-safety.sh", installer)
+        self.assertIn("deploy/el9/test-deployment-transaction.sh", installer)
         self.assertIn("docs/SERVER_OPERATIONS_RUNBOOK.md", installer)
         self.assertIn('scripts/check_documentation.py"', installer)
         self.assertLess(
             installer.index('scripts/check_documentation.py"'),
-            installer.index('BACKUP_PATH="'),
+            installer.index('BACKUP_PATH="${STATE_ROOT}'),
         )
         self.assertLess(
-            installer.index('BACKUP_PATH="'),
-            installer.index('pip" install --upgrade pip'),
+            installer.index('BACKUP_PATH="${STATE_ROOT}'),
+            installer.index('"${RELEASE_VENV}/bin/python" -m pip install'),
         )
 
         one_click = (ROOT / "deploy" / "el9" / "one-click-deploy.sh").read_text(
@@ -99,7 +105,8 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertLess(bootstrap, exit_trap)
         self.assertLess(exit_trap, bootstrap_install)
         self.assertIn("DEPLOY_COMPLETED=1", one_click)
-        self.assertIn("restore_nginx_config", one_click)
+        self.assertIn("restore_application_runtime", one_click)
+        self.assertIn("restore_nginx_runtime", one_click)
 
 
 if __name__ == "__main__":

@@ -26,6 +26,8 @@
 | 首次一键部署 | [一键部署与用户授权](ONE_CLICK_DEPLOY_AND_ADMIN.md) | 推荐的 `/data` 部署与所有管理命令 |
 | 需要逐步理解 EL9 | [EL9 手工部署](MANUAL_DEPLOY_EL9_IP_CERT.md) | Nginx、SELinux、firewalld、IP 短证书 |
 | 生成或轮换签名密钥 | [签名密钥运维](SIGNING_KEY_OPERATIONS.md) | 公钥清单、备份、恢复、客户端先行轮换 |
+| 发布审计与签字 | [授权服务验收标准](ACCEPTANCE_CRITERIA.md) | P0/P1/P2、授权不变量、回滚、法务与未通过循环 |
+| 商业法务与依赖来源 | [法务与 SBOM 发布门禁](LEGAL_AND_SBOM_RELEASE_GATE.md) | proprietary 基线、第三方 notice、精确依赖 SPDX 和人工法律签字 |
 | 审查固定 IP 部署决策 | [104.224.90.172 部署设计](DEPLOYMENT_104.224.90.172.md) | 网络、TLS、客户端权限语义 |
 | 修改文档或发布契约 | [文档随代码发布规则](DOCUMENTATION_POLICY.md) | 必修场景、校验命令和评审清单 |
 
@@ -54,14 +56,17 @@ SQLite schema 或套餐变更必须同时修改代码、测试、统一手册和
 cd /data/WeChatMemory-LicenseServer
 bash -n deploy/el9/*.sh deploy/el9/wkm-license-admin
 python3.11 scripts/check_documentation.py
-/opt/wechat-memory-license/venv/bin/python -m unittest discover -s tests -v
-/opt/wechat-memory-license/venv/bin/python -m license_server signing-key manifest \
+/opt/wechat-memory-license/current/.venv/bin/python -m unittest discover -s tests -v
+/opt/wechat-memory-license/current/.venv/bin/python scripts/generate_sbom.py \
+  --check sbom/server-runtime.spdx.json
+/opt/wechat-memory-license/current/.venv/bin/python -m license_server signing-key manifest \
   --manifest config/signing-public-keys.json
 git diff --check
 git status --short
 ```
 
-上述 `/opt/wechat-memory-license/venv` 命令适用于已安装过服务的生产机。首次部署前，完整单元测试必须在
+上述 `/opt/wechat-memory-license/current/.venv` 是当前 release 自己的独立环境；每个候选 release
+必须使用自己的 `.venv` 做测试和 SBOM 比对，不能污染正在运行的版本。首次部署前，完整单元测试必须在
 开发/发布机的项目 `.venv` 中完成；目标 EL9 上的无依赖文档门禁固定使用 `python3.11`。
 
 `deploy-from-data.sh` 会拒绝非 `main` 分支和非干净工作树。有未提交的文档或代码时，

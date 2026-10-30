@@ -1,0 +1,24 @@
+# Exact build, runtime and test constraints for the EL9 release gate.
+#
+# This prevents resolver drift before the approved SPDX inventory is checked.
+# It is not a wheel integrity manifest; the installed runtime is still checked
+# against sbom/server-runtime.spdx.json before any production state changes.
+setuptools==84.2.1
+
+blinker==1.9.0
+cffi==2.1.1
+click==8.5.0
+cryptography==46.0.7
+Flask==3.1.3
+itsdangerous==2.2.0
+Jinja2==3.1.6
+MarkupSafe==3.0.4
+pycparser==3.11
+waitress==3.0.2
+Werkzeug==3.1.9
+
+iniconfig==2.3.1
+packaging==26.3
+pluggy==1.7.0
+Pygments==2.21.0
+pytest==9.1.1

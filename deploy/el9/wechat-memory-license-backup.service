@@ -4,6 +4,9 @@ After=wechat-memory-license.service
 
 [Service]
 Type=oneshot
+Environment=REFRESH_SESSION_RETENTION_DAYS=90
+Environment=REFRESH_SESSION_PRUNE_BATCH_SIZE=500
+Environment=REFRESH_SESSION_PRUNE_MAX_BATCHES=20
 ExecStart=/usr/local/sbin/wkm-license-backup
 UMask=0077
 Nice=10

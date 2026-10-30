@@ -22,6 +22,14 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from license_server.migrations import (
+    LATEST_SCHEMA_VERSION,
+    MIGRATIONS,
+    MigrationError,
+    apply_migrations,
+    schema_version,
+)
+
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 MIN_SQLITE_VERSION = (3, 34, 1)
@@ -60,7 +68,7 @@ PLAN_SEEDS = {
         "features": [
             "read_only", "manual_sync", "realtime_sync", "multi_account",
             "single_session_export", "classified_export", "batch_export",
-            "advanced_analytics", "settings_write",
+            "standard_analytics", "advanced_analytics", "settings_write",
         ],
     },
 }
@@ -126,8 +134,9 @@ def seed_plans(con: sqlite3.Connection, now: str) -> None:
 
 
 def initialize_database(db_path: Path) -> dict:
-    if not SCHEMA_PATH.is_file():
-        raise RegistrationError(f"找不到 schema：{SCHEMA_PATH}")
+    missing = [item.path.name for item in MIGRATIONS if not item.path.is_file()]
+    if missing:
+        raise RegistrationError("缺少 migration：" + ", ".join(missing))
     db_path.parent.mkdir(parents=True, exist_ok=True)
     con = connect(db_path)
     try:
@@ -135,27 +144,26 @@ def initialize_database(db_path: Path) -> dict:
         if str(mode).lower() != "wal":
             raise RegistrationError(f"无法启用 WAL，SQLite 返回：{mode}")
         con.execute("PRAGMA synchronous = FULL")
-        con.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+        migration_time = iso(utc_now())
+        apply_migrations(con, applied_at=migration_time)
         with con:
-            seed_plans(con, iso(utc_now()))
+            seed_plans(con, migration_time)
         check = con.execute("PRAGMA integrity_check").fetchone()[0]
         if check != "ok":
             raise RegistrationError(f"数据库完整性检查失败：{check}")
     finally:
         con.close()
     harden_file(db_path)
-    return {"database": str(db_path.resolve()), "schema_version": 2,
+    return {"database": str(db_path.resolve()), "schema_version": LATEST_SCHEMA_VERSION,
             "journal_mode": "wal", "plans": list(PLAN_IDS)}
 
 
 def ensure_schema(con: sqlite3.Connection) -> None:
     try:
-        version = con.execute(
-            "SELECT value FROM schema_meta WHERE key='schema_version'"
-        ).fetchone()
-    except sqlite3.OperationalError as exc:
+        version = schema_version(con)
+    except (sqlite3.OperationalError, MigrationError) as exc:
         raise RegistrationError("数据库尚未初始化，请先运行 init") from exc
-    if not version or version[0] != "2":
+    if version != LATEST_SCHEMA_VERSION:
         raise RegistrationError("不支持的数据库 schema 版本")
 
 
@@ -307,7 +315,7 @@ def main(argv: list[str] | None = None) -> int:
                                    args.plan, args.days)
         print_result(result, args.json)
         return 0
-    except (RegistrationError, sqlite3.Error, OSError) as exc:
+    except (RegistrationError, MigrationError, sqlite3.Error, OSError) as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 2
 

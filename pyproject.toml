@@ -4,9 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wechat-memory-license-server"
-version = "0.2.1"
+version = "0.2.3"
 description = "WeChatMemory commercial license API"
+readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.11"
+classifiers = ["Private :: Do Not Upload"]
 dependencies = [
   "Flask>=3.1,<4",
   "waitress>=3,<4",

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -11,15 +12,21 @@ from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE_DOCUMENTS = (
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
     "README.md",
     "docs/README.md",
     "docs/DOCUMENTATION_POLICY.md",
+    "docs/ACCEPTANCE_CRITERIA.md",
+    "docs/LEGAL_AND_SBOM_RELEASE_GATE.md",
     "docs/SERVER_OPERATIONS_RUNBOOK.md",
     "docs/LICENSE_SERVER_ARCHITECTURE.md",
     "docs/ONE_CLICK_DEPLOY_AND_ADMIN.md",
     "docs/MANUAL_DEPLOY_EL9_IP_CERT.md",
     "docs/SIGNING_KEY_OPERATIONS.md",
     "docs/DEPLOYMENT_104.224.90.172.md",
+    "sbom/server-runtime.spdx.json",
+    "scripts/generate_sbom.py",
 )
 BASELINE_DOCUMENTS = (
     "README.md",
@@ -72,6 +79,24 @@ def check_repository(root: Path = ROOT) -> list[str]:
         for relative in CORE_DOCUMENTS:
             if not (ROOT / relative).is_file():
                 errors.append(f"missing core document: {relative}")
+
+        sbom_path = ROOT / "sbom" / "server-runtime.spdx.json"
+        if sbom_path.is_file():
+            try:
+                sbom = json.loads(sbom_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                errors.append(f"cannot read SPDX SBOM: {exc}")
+            else:
+                if sbom.get("spdxVersion") != "SPDX-2.3":
+                    errors.append("SPDX SBOM must use SPDX-2.3")
+                if sbom.get("dataLicense") != "CC0-1.0":
+                    errors.append("SPDX SBOM dataLicense must be CC0-1.0")
+                packages = sbom.get("packages")
+                if not isinstance(packages, list) or len(packages) < 2:
+                    errors.append("SPDX SBOM must inventory application dependencies")
+                relationships = sbom.get("relationships")
+                if not isinstance(relationships, list) or not relationships:
+                    errors.append("SPDX SBOM must contain dependency relationships")
 
         markdown = [ROOT / "README.md", *sorted((ROOT / "docs").rglob("*.md"))]
         for source in markdown:

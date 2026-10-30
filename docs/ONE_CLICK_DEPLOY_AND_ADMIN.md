@@ -32,6 +32,10 @@ flowchart LR
 5. 已准备运维邮箱；
 6. 证书通知与运维邮箱为 `gladlygrady@tutamail.com`；
 7. 已把与客户端公钥配对的 Ed25519 私钥安全上传到服务器，例如：
+8. **首次正式签发前的强制人工门禁**：必须先按
+   [手工部署 6.2](MANUAL_DEPLOY_EL9_IP_CERT.md#62-多业务服务器的无损-acme-排错)
+   在本机用 Host 头验证专属 webroot，再从服务器之外的电脑或移动网络访问同一探针并保存结果。
+   本机成功不能证明云安全组、EIP/NAT 和上游 ACL 允许 CA 访问；外部探针未成功时禁止运行正式 Certbot。
 
 ```text
 /root/wkm-signing-ed25519.pem
@@ -63,7 +67,8 @@ ssh root@104.224.90.172 \
 暂存 `.upload` 文件会由远程 `trap` 在成功或失败时清理。
 
 Let's Encrypt 的 IP 地址证书必须使用短期证书配置。Certbot 需要 5.4 或更高版本；本仓库默认固定
-`5.9.0`。证书约 160 小时有效，续期自动化是生产必需条件。官方说明：
+`5.9.0`。一键部署同时校验 `x.y.z` 格式和数值下限，格式正确但低于 `5.4.0` 也会失败关闭。
+证书约 160 小时有效，续期自动化是生产必需条件。官方说明：
 
 - <https://letsencrypt.org/2026/03/11/shorter-certs-certbot>
 - <https://letsencrypt.org/ca/docs/profiles/>
@@ -95,8 +100,12 @@ SQLite 数据库或运行日志。实际发布版、状态和密钥仍分别位�
 cd /data/WeChatMemory-LicenseServer
 
 sudo bash deploy/el9/deploy-from-data.sh \
-  --signing-key /root/wkm-signing-ed25519.pem
+  --signing-key /root/wkm-signing-ed25519.pem \
+  --firewall-zone public
 ```
+
+`public` 只是示例；必须使用公网网卡实际所属 zone。只有一个活动 zone 时可省略该参数；
+检测到多个 zone 时脚本会失败关闭，不会把入站规则批量加到多个网络。
 
 该入口默认执行 `origin/main` fast-forward，并固定：
 
@@ -121,25 +130,52 @@ sudo bash deploy/el9/one-click-deploy.sh \
   --key-id 2026-10-30 \
   --email gladlygrady@tutamail.com \
   --public-ip 104.224.90.172 \
-  --public-port 9000
+  --public-port 9000 \
+  --firewall-zone public
 ```
 
 脚本会自动完成：
 
 1. 校验 EL9、IPv4、端口、源码，并反向计算签名私钥的公钥，确认它与仓库跟踪的公开清单一致；
-2. 安装 Nginx、SQLite、Python 3.11、firewalld、SELinux 工具、Certbot；
+2. 安装 Nginx、SQLite、Python 3.11、firewalld、SELinux 工具和项目专属 Certbot 环境；
 3. 创建 `wkm-license` 无登录系统账号；
-4. 配置防火墙、SELinux 和 ACME webroot；
+4. 在唯一的活动 firewalld zone 中精确增加规则（不全量 reload），配置 SELinux 和专属 ACME webroot；
 5. 申请包含 `104.224.90.172` IP SAN 的受信任短期证书；
-6. 安装每四小时运行的证书续期定时器；
-7. 发布不可变版本目录并原子切换 `current`；
-8. 初始化 SQLite schema 和套餐；
-9. 安装并启动 systemd 授权服务；
-10. 安装每日 SQLite 一致性备份；
-11. 验证本机 API、公网 HTTPS、证书 SAN 和签名公钥接口。
+6. 安装每四小时运行、只续期本 IP 证书的专属定时器；
+7. 创建不可变候选 release 源码目录；
+8. 对旧库创建并校验 SQLite 一致备份；
+9. 在候选 release 内扫描私钥标记，建立独立 `.venv`，验证依赖闭包与精确 SBOM，强制执行严格编译、服务端全测、全部 EL9 Shell 语法和部署事务自测，校验签名私钥后再执行 SQLite init/migration；
+10. 安装 systemd 单元和每日备份定时器，原子切换 `current`，启动授权服务并通过本机 `/readyz/deep`；
+11. 切换 Nginx 生产配置，验证公网 HTTPS、证书 SAN、`/readyz` 和签名公钥接口。
 
-脚本不会删除已经存在的数据库。升级前会先通过 SQLite `.backup` 创建一致性备份，健康检查失败时会
-尝试切回上一版代码。
+在同机多业务环境，脚本只拥有
+`/etc/nginx/conf.d/wechat-memory-license.conf`：
+
+- 不删除、改名或覆盖其他 `conf.d` 文件；
+- 若目标文件不含项目 owner marker，也不符合旧版唯一特征，拒绝覆盖；
+- 若其他配置已声明 `104.224.90.172` 或监听 `9000`，拒绝抢占；
+- 写入前后会校验其他 Nginx 配置的摘要；部署期间它们发生变化就拒绝 reload；
+- 已运行的 Nginx 中 ACME 路由已经实际生效时，不做无意义 reload；新配置则先
+  `nginx -t`，再热加载，并用本地 Host 头探针验证。
+
+`entityecho.conf` 这类现有站点可以继续共享 `listen 80`，只要 `server_name`
+不抢占本项目 IP。部署过程中不要同时修改其他 Nginx 站点；需要修改时先结束本次部署。
+
+脚本不会删除已经存在的数据库。升级前会先通过 SQLite `.backup` 创建一致性备份。候选版本的
+本机验收、Nginx 切换或公网验收失败时，脚本会恢复部署前的 `current`、`service.env`、
+systemd 单元/服务状态和 Nginx 配置/服务状态；`--tls-mode existing` 还会按字节恢复覆盖前的
+固定路径证书与私钥。但候选版本已经执行过的 SQLite migration 不会
+在服务可能产生新写入后自动降级；这时日志会明确提示备份和人工恢复边界。
+补偿回滚会只撤销本次新增的 firewalld 运行/永久规则、SELinux 端口和布尔值，不执行全局
+`firewall-cmd --reload`，也不会改写已属于其他 SELinux 类型的端口。它不卸载系统软件包、删除 Let's Encrypt 已签发证书、
+候选 release 或已安全安装但未激活的版本化签名私钥。这些不影响旧版运行态，保留用于取证或下次重试；
+确认不再需要后再按明确路径人工清理。进程被 `SIGKILL` 或主机掉电时 Shell 无法执行 EXIT 补偿，
+事务快照会保留在 `/etc/wechat-memory-license/.one-click-transaction.*` 或 `.install-transaction.*`。下次部署会
+失败关闭，拒绝覆盖这些恢复证据。必须按统一运维手册核对 `current`、`service.env`、systemd、
+Nginx 和数据库备份，确认恢复完成后才能移走事务目录并重新开放流量。
+
+可在隔离验收机上通过 `WKM_DEPLOY_ENABLE_FAULT_INJECTION=1` 和
+`WKM_DEPLOY_TEST_FAULT=after_application_install|after_nginx_switch` 注入故障。生产日常部署不得设置这两个变量。
 
 ### 3.4 使用已有受信任证书
 
@@ -161,6 +197,9 @@ sudo bash deploy/el9/one-click-deploy.sh \
 - 不包含目标公网 IP SAN；
 - 文件不存在或无法读取。
 
+existing 证书会复制到 Nginx 固定路径。复制前脚本捕获旧证书和私钥；证书校验、应用安装、
+Nginx 切换或公网验收任一步失败，都会在恢复旧 Nginx 配置并 reload 前先按字节恢复这两个文件。
+
 正式客户端不能使用自签名证书，也不能关闭 TLS 证书校验。
 
 ## 4. 部署后验收
@@ -168,10 +207,10 @@ sudo bash deploy/el9/one-click-deploy.sh \
 ```bash
 sudo systemctl status wechat-memory-license --no-pager
 sudo systemctl status nginx --no-pager
-sudo systemctl status certbot-renew.timer --no-pager
+sudo systemctl status wechat-memory-certbot-renew.timer --no-pager
 sudo systemctl status wechat-memory-license-backup.timer --no-pager
 
-curl --fail --silent --show-error http://127.0.0.1:9100/readyz
+curl --fail --silent --show-error http://127.0.0.1:9100/readyz/deep
 curl --fail --silent --show-error https://104.224.90.172:9000/readyz
 curl --fail --silent --show-error https://104.224.90.172:9000/v1/keys
 ```
@@ -415,11 +454,38 @@ sudo wkm-license-admin device-status \
   --status active
 ```
 
-解绑或封禁会立即撤销该设备当前 refresh token。恢复设备时仍会检查设备数量上限。
+解绑或封禁会立即撤销该设备当前 refresh token。普通激活请求不能解除 `blocked`；只能由管理员显式
+恢复。`deactivated` 设备重新激活和管理员恢复都必须重新检查设备数量上限。
 
-## 11. 数据库备份和恢复
+## 11. refresh session 保留清理
 
-每日 UTC 03:15 自动执行 SQLite `.backup`：
+旧 refresh token 的摘要需要短期保留以拒绝重放和支持审计，但 `rotated/revoked` 行不能无限增长。
+默认保留 90 天，手工命令如下：
+
+```bash
+sudo wkm-license-admin --json prune-refresh-sessions \
+  --retention-days 90 \
+  --batch-size 500 \
+  --max-batches 20
+```
+
+命令只删除超过保留期且终态时间有效的 `rotated/revoked`；不会删除 `active`、`expired`、近期终态
+或时间戳缺失的行。每批是独立短事务，固定最多 500 条；一次最多 100 批，默认 20 批。返回
+`more_remaining=true` 时分次重跑，不要绕过上限。
+
+每日备份 timer 会在一致备份完成并校验后自动执行默认清理。可通过
+`wechat-memory-license-backup.service` 的 systemd drop-in 设置：
+
+- `REFRESH_SESSION_RETENTION_DAYS`；
+- `REFRESH_SESSION_PRUNE_BATCH_SIZE`；
+- `REFRESH_SESSION_PRUNE_MAX_BATCHES`。
+
+建议先保留默认值，观察一周各状态行数和清理日志后再调整。
+清理不会删除 `audit_events`；审计证据的保留与归档是独立合规工作，当前版本仅监控容量，不自动删除。
+
+## 12. 数据库备份和恢复
+
+每日 UTC 03:15 自动执行 SQLite `.backup`，完整性通过后才执行上述终态会话清理：
 
 ```bash
 sudo systemctl list-timers wechat-memory-license-backup.timer
@@ -444,11 +510,11 @@ sudo -u wkm-license sqlite3 \
 ```
 
 恢复属于高风险操作，应先保留当前数据库，再使用 SQLite `.restore`，完成后重新检查完整性、文件权限
-和 `/readyz`。不要在服务运行时直接复制单独的 `.sqlite3` 文件，因为 WAL 中可能仍有未合并数据。
+和仅本机可访问的 `/readyz/deep`。不要在服务运行时直接复制单独的 `.sqlite3` 文件，因为 WAL 中可能仍有未合并数据。
 可执行的停服务恢复、原数据保留和恢复失败回退步骤见
 [`SERVER_OPERATIONS_RUNBOOK.md`](SERVER_OPERATIONS_RUNBOOK.md#62-数据库恢复)。
 
-## 12. 日志和故障排查
+## 13. 日志和故障排查
 
 授权服务日志：
 
@@ -467,9 +533,10 @@ sudo tail -n 100 /var/log/nginx/wechat-memory-license.access.log
 证书续期：
 
 ```bash
-sudo systemctl status certbot-renew.timer --no-pager
-sudo journalctl -u certbot-renew.service --since '24 hours ago'
-sudo /opt/certbot/bin/certbot renew --dry-run \
+sudo systemctl status wechat-memory-certbot-renew.timer --no-pager
+sudo journalctl -u wechat-memory-certbot-renew.service --since '24 hours ago'
+sudo /opt/wechat-memory-license-certbot/bin/certbot renew --dry-run \
+  --cert-name 104.224.90.172 \
   --deploy-hook /usr/local/sbin/wkm-certbot-deploy
 ```
 
@@ -480,13 +547,13 @@ sudo -u wkm-license sqlite3 /var/lib/wechat-memory-license/license.sqlite3 \
   'PRAGMA integrity_check; PRAGMA journal_mode; PRAGMA foreign_keys;'
 ```
 
-## 13. 重要目录
+## 14. 重要目录
 
 | 路径 | 用途 |
 |---|---|
-| `/opt/wechat-memory-license/releases/` | 不可变发布版本 |
+| `/opt/wechat-memory-license/releases/` | 不可变发布版本；每个 release 自带独立 `.venv` |
 | `/opt/wechat-memory-license/current` | 当前版本符号链接 |
-| `/opt/wechat-memory-license/venv` | 服务端 Python 环境 |
+| `/opt/wechat-memory-license/current/.venv` | 当前 release 的 Python 环境；不与其他 release 共享 |
 | `/etc/wechat-memory-license/service.env` | 服务配置 |
 | `/etc/wechat-memory-license/signing-ed25519-<key-id>.pem` | 按 key-id 版本化的 Ed25519 私钥 |
 | `/var/lib/wechat-memory-license/license.sqlite3` | 授权数据库 |
@@ -494,7 +561,7 @@ sudo -u wkm-license sqlite3 /var/lib/wechat-memory-license/license.sqlite3 \
 | `/usr/local/sbin/wkm-license-admin` | 用户管理入口 |
 | `/var/log/nginx/wechat-memory-license.*` | 公网代理日志 |
 
-## 14. 上线安全检查
+## 15. 上线安全检查
 
 - [ ] 9100 未对公网开放；
 - [ ] 9000 使用受信任且包含公网 IP SAN 的证书；

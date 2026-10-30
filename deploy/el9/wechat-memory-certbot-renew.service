@@ -1,0 +1,12 @@
+[Unit]
+Description=Renew only the WeChatMemory IP short-lived certificate
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/wechat-memory-license-certbot/bin/certbot renew --quiet --cert-name 104.224.90.172 --deploy-hook /usr/local/sbin/wkm-certbot-deploy
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/etc/letsencrypt /var/lib/letsencrypt /var/log/letsencrypt

@@ -110,7 +110,20 @@ class LicenseManager:
             if existing and existing["device_hash"] != device_hash:
                 raise LicenseError("activation_failed", status=401)
             if existing:
+                if existing["status"] == "blocked":
+                    # An operator block is an explicit security decision.  A
+                    # still-valid activation code must not silently undo it.
+                    raise LicenseError("activation_failed", status=401)
                 device_id = existing["id"]
+                if existing["status"] != "active":
+                    active_count = connection.execute(
+                        "SELECT COUNT(*) FROM devices WHERE entitlement_id=? "
+                        "AND status='active' AND id<>?",
+                        (row["id"], device_id),
+                    ).fetchone()[0]
+                    snapshot = json.loads(row["plan_snapshot_json"])
+                    if active_count >= int(snapshot["device_limit"]):
+                        raise LicenseError("device_limit_reached", status=409)
                 connection.execute(
                     "UPDATE devices SET status='active',platform=?,app_version=?,last_seen_at=?,"
                     "deactivated_at=NULL WHERE id=?",
@@ -148,8 +161,15 @@ class LicenseManager:
                 connection, "client", device_id, "device.activated", "device", device_id,
                 {"plan_id": row["plan_id"]}, now_text,
             )
+            trusted_device = connection.execute(
+                "SELECT id AS device_id,install_id,device_hash "
+                "FROM devices WHERE id=?",
+                (device_id,),
+            ).fetchone()
+            if trusted_device is None:  # Defensive: the write transaction owns this row.
+                raise LicenseError("activation_failed", status=401)
             response = self._response(
-                row, row["username"], device_id, install_id, now
+                row, row["username"], trusted_device, now
             )
         response["refresh_token"] = refresh_token
         return response
@@ -190,9 +210,7 @@ class LicenseManager:
                 connection, "client", row["device_id"], "license.refreshed", "device",
                 row["device_id"], {}, now_text,
             )
-            response = self._response(
-                row, row["username"], row["device_id"], row["install_id"], now
-            )
+            response = self._response(row, row["username"], row, now)
         response["refresh_token"] = new_token
         return response
 
@@ -208,9 +226,7 @@ class LicenseManager:
                 or parse_time(row["session_expires_at"]) <= now
             ):
                 raise LicenseError("refresh_failed", status=401)
-            return self._response(
-                row, row["username"], row["device_id"], row["install_id"], now
-            )
+            return self._response(row, row["username"], row, now)
 
     def deactivate(self, payload: dict[str, Any]) -> dict[str, Any]:
         refresh_token = require_text(payload, "refresh_token", 256)
@@ -275,10 +291,20 @@ class LicenseManager:
         return not row["expires_at"] or parse_time(row["expires_at"]) > now
 
     def _response(
-        self, row: sqlite3.Row, account: str, device_id: str, install_id: str,
-        now: datetime,
+        self, row: sqlite3.Row, account: str, device: sqlite3.Row, now: datetime,
     ) -> dict[str, Any]:
         snapshot = json.loads(row["plan_snapshot_json"])
+        capabilities = list(snapshot["features"])
+        # Existing pro entitlements keep a plan snapshot.  Older snapshots used
+        # only advanced_analytics, while the shipped client gates its stats API
+        # on standard_analytics.  Preserve the advanced marker and add the
+        # baseline capability at response time so upgrades do not require
+        # rewriting commercial entitlement history.
+        if (
+            row["plan_id"] == "pro_subscription"
+            and "standard_analytics" not in capabilities
+        ):
+            capabilities.append("standard_analytics")
         active = self._entitlement_active(row, now)
         status = "active" if active else "expired"
         not_before = now - timedelta(minutes=5)
@@ -298,11 +324,12 @@ class LicenseManager:
             "audience": self.settings.audience,
             "ticket_id": str(uuid.uuid4()),
             "account": account,
-            "device_id": device_id,
-            "install_id": install_id,
+            "device_id": device["device_id"],
+            "install_id": device["install_id"],
+            "device_hash": device["device_hash"],
             "plan": row["plan_id"],
             "status": status,
-            "capabilities": snapshot["features"] if active else list(READ_ONLY),
+            "capabilities": capabilities if active else list(READ_ONLY),
             "not_before": iso(not_before),
             "expires_at": iso(online_expiry),
             "offline_until": iso(max(online_expiry, offline_until)),

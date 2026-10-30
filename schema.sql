@@ -1,3 +1,5 @@
+-- Latest schema snapshot for review and tooling. Runtime initialization and
+-- upgrades are driven by the ordered, transactional files in migrations/.
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -5,7 +7,16 @@ CREATE TABLE IF NOT EXISTS schema_meta (
     value TEXT NOT NULL
 );
 
-INSERT INTO schema_meta(key, value) VALUES ('schema_version', '2')
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    -- Native rows identify immutable SQL files. Pre-ledger databases instead
+    -- use legacy-schema-vN-adopted and hash a versioned structure contract.
+    version INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    sha256 TEXT NOT NULL CHECK(length(sha256) = 64),
+    applied_at TEXT NOT NULL
+);
+
+INSERT INTO schema_meta(key, value) VALUES ('schema_version', '3')
 ON CONFLICT(key) DO UPDATE SET value = excluded.value;
 
 CREATE TABLE IF NOT EXISTS customers (
@@ -102,7 +113,13 @@ CREATE INDEX IF NOT EXISTS idx_devices_entitlement
     ON devices(entitlement_id, status);
 CREATE INDEX IF NOT EXISTS idx_refresh_sessions_device
     ON refresh_sessions(device_id, status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_refresh_sessions_rotated_retention
+    ON refresh_sessions(rotated_at, id)
+    WHERE status='rotated' AND rotated_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_refresh_sessions_revoked_retention
+    ON refresh_sessions(revoked_at, id)
+    WHERE status='revoked' AND revoked_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_audit_subject
     ON audit_events(subject_type, subject_id, created_at);
 
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;

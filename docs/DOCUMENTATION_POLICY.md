@@ -1,9 +1,9 @@
 # 跨仓库交付总览与文档治理规范
 
-> 基线日期：2026-10-30  
-> 客户端：`WeChatMemory-Client 0.3.2`  
-> 授权服务端：`WeChatMemory-LicenseServer 0.2.1`  
-> 授权协议：`v1`；服务端 SQLite schema：`2`；公钥清单 schema：`1`
+> 基线日期：2026-10-30
+> 客户端：`WeChatMemory-Client 0.3.3`
+> 授权服务端：`WeChatMemory-LicenseServer 0.2.3`
+> 授权协议：`v1`；服务端 SQLite schema：`3`；公钥清单 schema：`1`
 
 本文是客户端与授权服务端协同发布的入口。它说明两个仓库的边界、部署顺序、版本与信任根检查，
 并规定代码变更后必须同步哪些文档。命令参数若与本文不一致，以当前分支脚本的 `--help` 和源码为准，
@@ -21,6 +21,8 @@
 | SQLite schema | `schema.sql` 和迁移代码 | 文档不能代替迁移测试 |
 | 生产部署与管理员命令 | [`ONE_CLICK_DEPLOY_AND_ADMIN.md`](ONE_CLICK_DEPLOY_AND_ADMIN.md) | 参数以脚本 `--help` 为准 |
 | 签名密钥生成、备份和轮换 | [`SIGNING_KEY_OPERATIONS.md`](SIGNING_KEY_OPERATIONS.md) | 私钥绝不进入仓库 |
+| P0/P1/P2、授权不变量和发布签字 | [`ACCEPTANCE_CRITERIA.md`](ACCEPTANCE_CRITERIA.md) | 未有证据视为未通过 |
+| proprietary 许可、第三方来源和精确依赖 | [`LEGAL_AND_SBOM_RELEASE_GATE.md`](LEGAL_AND_SBOM_RELEASE_GATE.md)、根 `LICENSE`、`THIRD_PARTY_NOTICES.md` 和 `sbom/server-runtime.spdx.json` | 自动门禁不等于法律批准；正式商用必须有人类法务/合规签字 |
 | 服务端公开信任清单 | `config/signing-public-keys.json` | 客户端只接收经过审核的镜像 |
 | 客户端内置信任根 | `security/license-public-keys.json` 和生成的 `license_trust.py` | `/v1/keys` 仅诊断，不能建立信任 |
 
@@ -42,7 +44,7 @@ flowchart LR
 
     subgraph CLOUD["104.224.90.172：授权控制平面"]
         NGINX["Nginx HTTPS :9000"] --> API["Waitress / Flask 127.0.0.1:9100"]
-        API --> DB["本机 SQLite schema 2"]
+        API --> DB["本机 SQLite schema 3"]
         KEY["受限 Ed25519 私钥"] --> API
     end
 
@@ -62,6 +64,9 @@ flowchart LR
 - 授权用户名和一次性激活码；服务端仅持久化激活码摘要；
 - 安装标识、匿名设备摘要、平台和客户端版本；
 - 刷新令牌、设备状态、套餐、能力、到期时间和审计事件。
+
+服务端签名票据中的 `device_id`、`install_id` 和 `device_hash` 必须来自已验证的设备数据库行；
+激活请求、刷新请求或状态查询都不得把未经绑定校验的任意 payload 值直接提升为签名 claims。
 
 支付、退款、邮箱或手机号真实性验证不属于当前服务。用户存在性也不等同于身份认证，首次激活必须
 同时具备高熵一次性激活码。授权到期后由客户端执行只读降级，不能删除或上传用户的本地档案。
@@ -137,13 +142,17 @@ bash deploy/el9/deploy-from-data.sh --help
 sudo systemctl status wechat-memory-license --no-pager
 curl --fail --silent http://127.0.0.1:9100/healthz
 curl --fail --silent http://127.0.0.1:9100/readyz
+curl --fail --silent http://127.0.0.1:9100/readyz/deep
 curl --fail --silent https://104.224.90.172:9000/healthz
 curl --fail --silent https://104.224.90.172:9000/readyz
 curl --fail --silent https://104.224.90.172:9000/v1/keys
 ```
 
-不得使用 `curl -k` 掩盖证书问题。`/readyz` 必须确认数据库和签名器都可用；`/v1/keys` 的
-`active_key_id` 和指纹必须与仓库公开清单一致，但该接口仍只是诊断信息。
+不得使用 `curl -k` 掩盖证书问题。当前 `/readyz` 是受限流的廉价探针，只确认 SQLite 可用、
+版本一致且满足版本化最低结构合同；完整 `PRAGMA quick_check` 仅由 loopback `/readyz/deep` 执行，Nginx 必须拒绝公网访问
+该深度探针。签名私钥与公开清单的匹配在应用启动时 fail closed。`/v1/keys` 的 `active_key_id`
+和指纹还必须与仓库公开清单一致，但该接口仍只是诊断信息。生产发布还要执行
+[验收标准](ACCEPTANCE_CRITERIA.md) 中的签名 canary，不能只依赖 ready 响应。
 
 建立金丝雀用户并立即安全保存一次性激活码：
 
@@ -159,7 +168,7 @@ Windows 10/11 x64 上使用 x64 Python/PowerShell：
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File ".\packaging\windows\build.ps1" `
-  -Version "0.3.2" `
+  -Version "0.3.3" `
   -Edition NativeCandidate
 ```
 
@@ -169,7 +178,7 @@ helper 完整，不应通过降级为开发版规避预检。
 Ubuntu/Linux 构建：
 
 ```bash
-VERSION=0.3.2 ./packaging/linux/build.sh
+VERSION=0.3.3 ./packaging/linux/build.sh
 ```
 
 ### 3.5 跨端最终验收
@@ -183,12 +192,12 @@ VERSION=0.3.2 ./packaging/linux/build.sh
 
 | 层 | 当前基线 | 兼容要求 | 发布状态 |
 |---|---|---|---|
-| 客户端 | `0.3.2` | Windows 10/11 x64；Ubuntu/Linux x86_64 | Windows 为 NativeCandidate，须实机验收 |
+| 客户端 | `0.3.3` | Windows 10/11 x64；Ubuntu/Linux x86_64 | Windows 为 NativeCandidate，须实机验收 |
 | Windows 微信 | 4.x 读取框架 | 取钥门禁目前精确信任腾讯签名的 `Weixin.exe 4.1.0.34` 指定哈希 | 其他版本必须新增证据和门禁，不能默认放行 |
-| 授权服务端 | `0.2.1` | Enterprise Linux 9、Python 3.11、单主 SQLite | 手工部署 |
+| 授权服务端 | `0.2.3` | Enterprise Linux 9、Python 3.11、单主 SQLite | 手工部署 |
 | 公网接口 | `/v1/*` | HTTPS `104.224.90.172:9000`；内部 `127.0.0.1:9100` | 禁止 HTTP 降级 |
 | 授权协议 | `v1` | `issuer=wechat-memory-license`、`audience=wechat-memory-client` | 未知 `key_id` 失败关闭 |
-| 服务端数据库 | schema `2` | 只允许受测迁移，部署前后均需备份和 `readyz` | SQLite WAL 单主 |
+| 服务端数据库 | schema `3` | 顺序 migration；终态 refresh session 有界清理；部署前后均需备份、廉价 `readyz` 和 loopback `readyz/deep` | SQLite WAL 单主 |
 | 公钥清单 | schema `1` | Ed25519、base64url raw no padding；当前 active key `2026-10-30` | 服务端清单与客户端镜像必须一致 |
 
 版本号相同不代表信任根相同。每个发布物必须同时记录客户端版本、服务端版本、协议版本、数据库 schema、
@@ -216,6 +225,7 @@ VERSION=0.3.2 ./packaging/linux/build.sh
 | key-id、公钥、轮换状态 | 服务端公开清单、客户端镜像、生成文件、密钥运维文档和发布记录 |
 | IP、域名、端口、TLS 方式 | 服务端部署文档、客户端固定端点、Nginx/防火墙示例和验收命令 |
 | 构建参数或依赖 | README、Windows/Linux 打包文档和复制即用的命令 |
+| 服务端直接/传递依赖或许可证元数据 | `THIRD_PARTY_NOTICES.md`、SPDX SBOM、法务/SBOM 门禁文档和发布证据 |
 | 微信版本门禁、快照或取钥 | 客户端技术架构、Windows 实现/交付、故障码和实机矩阵 |
 | 消息解析或富媒体能力 | 消息覆盖矩阵、用户手册、导出说明和相关测试 |
 | 隐私或日志字段 | 两仓库安全边界、隐私说明、日志脱敏测试和本文数据边界 |
@@ -231,6 +241,8 @@ VERSION=0.3.2 ./packaging/linux/build.sh
 - [ ] 服务端私钥与 active key-id/公开清单匹配，权限和备份已核验；
 - [ ] 仓库和构建日志不含 PEM 私钥、激活码、刷新令牌、聊天内容、数据库密钥或绝对用户路径；
 - [ ] 两仓库测试、客户端 release preflight、Shell/PowerShell 预检和 `git diff --check` 通过；
+- [ ] 候选 release 独立 `.venv` 与 `sbom/server-runtime.spdx.json` 完整比对通过，且依赖变化已有人工许可证复核；
+- [ ] 商业发布记录包含工程、法务/合规和部署批准人；自动化结果没有被描述为“法律审核通过”；
 - [ ] 数据库 schema、授权协议、客户端/服务端版本和信任根摘要写入发布记录；
 - [ ] 复制即用的首次部署、升级、回滚、用户新增和设备解绑步骤仍与现行代码一致。
 
@@ -249,8 +261,9 @@ git diff --check
 `deploy/el9/install-release.sh` 会在安装依赖和切换 `current` 之前：
 
 1. 确认根 README、文档索引、本治理规范、统一运维手册及全部核心专题文档已进入 release；
-2. 确认 `scripts/check_documentation.py` 已进入 release；
-3. 直接在 release 目录上运行文档契约校验。
+2. 确认 proprietary `LICENSE`、`THIRD_PARTY_NOTICES.md`、SPDX 基线和 SBOM 生成器已进入 release；
+3. 直接在 release 目录上运行文档契约校验；
+4. 候选独立 `.venv` 建成后、切换服务和修改数据库前，以 `scripts/generate_sbom.py --check` 对比精确依赖环境。
 
 任何必需文档未跟踪、相对链接失效，或源码目录、公网地址、邮箱等生产默认值漂移，
 都会在修改服务状态前终止部署。不允许在服务器 release 目录中手工补文档绕过该门禁；

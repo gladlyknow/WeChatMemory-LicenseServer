@@ -5,6 +5,9 @@ umask 077
 DATABASE_PATH="${DATABASE_PATH:-/var/lib/wechat-memory-license/license.sqlite3}"
 BACKUP_ROOT="${BACKUP_ROOT:-/var/lib/wechat-memory-license/backups}"
 RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-30}"
+SESSION_RETENTION_DAYS="${REFRESH_SESSION_RETENTION_DAYS:-90}"
+SESSION_BATCH_SIZE="${REFRESH_SESSION_PRUNE_BATCH_SIZE:-500}"
+SESSION_MAX_BATCHES="${REFRESH_SESSION_PRUNE_MAX_BATCHES:-20}"
 
 if [[ ${EUID} -ne 0 ]]; then
   echo "请以 root 执行数据库备份。" >&2
@@ -18,6 +21,12 @@ if [[ ! "${RETENTION_DAYS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "BACKUP_RETENTION_DAYS 必须是正整数。" >&2
   exit 3
 fi
+for value in "${SESSION_RETENTION_DAYS}" "${SESSION_BATCH_SIZE}" "${SESSION_MAX_BATCHES}"; do
+  if [[ ! "${value}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "刷新会话清理参数必须是正整数。" >&2
+    exit 3
+  fi
+done
 
 install -d -o wkm-license -g wkm-license -m 0700 "${BACKUP_ROOT}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -37,4 +46,12 @@ chmod 0600 "${DESTINATION}"
 
 find "${BACKUP_ROOT}" -maxdepth 1 -type f -name 'license-*.sqlite3' \
   -mtime "+${RETENTION_DAYS}" -delete
+
+# Cleanup only after a verified backup exists.  The administrator command has
+# hard batch ceilings, uses short write transactions and never deletes active
+# sessions, so this timer cannot turn into an unbounded request-path scan.
+/usr/local/sbin/wkm-license-admin --json prune-refresh-sessions \
+  --retention-days "${SESSION_RETENTION_DAYS}" \
+  --batch-size "${SESSION_BATCH_SIZE}" \
+  --max-batches "${SESSION_MAX_BATCHES}"
 echo "备份完成：${DESTINATION}"

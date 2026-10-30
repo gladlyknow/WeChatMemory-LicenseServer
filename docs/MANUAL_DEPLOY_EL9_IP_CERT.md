@@ -55,17 +55,20 @@ IP 短期证书当前有效期为 160 小时（约 6 天 16 小时）。所以�
 sudo dnf upgrade -y
 sudo dnf install -y nginx firewalld policycoreutils-python-utils sqlite \
   python3.11 python3.11-pip
-sudo systemctl enable --now firewalld
 ```
+
+同机已有业务时，不得为了部署而盲目启动 firewalld：启动它可能接管当前 nftables
+策略。先执行 `systemctl is-active firewalld` 并确认现有入站策略。新机也应先在带序列台的
+维护窗口启用，不要让部署脚本代替这个网络决策。
 
 Certbot 的 IP 证书 webroot 支持要求 Certbot 5.4 或更高版本。EL9 的系统 Python 3.9 不满足当前
 Certbot 的 Python 要求，所以单独使用 Python 3.11 虚拟环境，并固定已验证版本：
 
 ```bash
-sudo python3.11 -m venv /opt/certbot
-sudo /opt/certbot/bin/python -m pip install --upgrade pip
-sudo /opt/certbot/bin/pip install 'certbot==5.8.0'
-/opt/certbot/bin/certbot --version
+sudo python3.11 -m venv /opt/wechat-memory-license-certbot
+sudo /opt/wechat-memory-license-certbot/bin/python -m pip install --upgrade pip
+sudo /opt/wechat-memory-license-certbot/bin/pip install 'certbot==5.9.0'
+/opt/wechat-memory-license-certbot/bin/certbot --version
 ```
 
 如果系统找不到 `python3.11`，先把 EL9 升级到仍受支持的当前小版本并启用发行版官方 AppStream；
@@ -85,26 +88,26 @@ sudo install -d -o nginx -g nginx -m 0755 /var/www/wechat-memory-license-acme
 ```
 
 以后每次手工发布使用不可变版本目录，例如
-`/opt/wechat-memory-license/releases/2026.10.17.1`，验证后再原子切换 `current` 符号链接。不要覆盖正在
-运行的版本目录，至少保留上一个可回滚版本。
+`/opt/wechat-memory-license/releases/2026.10.17.1`。每个版本在自身 `.venv` 中安装依赖，验证后再原子切换
+`current` 符号链接。不要覆盖正在运行的版本目录，至少保留上一个带完整 `.venv` 的可回滚版本。
 
 ## 5. 配置防火墙与 SELinux
 
 ```bash
-sudo firewall-cmd --permanent --add-service=http
-sudo firewall-cmd --permanent --add-port=9000/tcp
-sudo firewall-cmd --reload
+PUBLIC_ZONE=public  # 必须替换为公网网卡实际所属 zone
+sudo firewall-cmd --zone="${PUBLIC_ZONE}" --add-service=http
+sudo firewall-cmd --zone="${PUBLIC_ZONE}" --permanent --add-service=http
+sudo firewall-cmd --zone="${PUBLIC_ZONE}" --add-port=9000/tcp
+sudo firewall-cmd --zone="${PUBLIC_ZONE}" --permanent --add-port=9000/tcp
 sudo semanage port -a -t http_port_t -p tcp 9000
 sudo setsebool -P httpd_can_network_connect 1
 sudo restorecon -RFv /var/www/wechat-memory-license-acme
 ```
 
-若 `semanage port -a` 提示 9000 已定义，先运行
-`sudo semanage port -l | grep -w 9000`。只有确认它未归属 `http_port_t` 时，才执行：
-
-```bash
-sudo semanage port -m -t http_port_t -p tcp 9000
-```
+不使用 `firewall-cmd --reload`，因为它会重建整个 firewalld 运行态，并可能清除其他业务的临时规则。
+若 `semanage port -a` 提示 9000 已定义，执行
+`sudo semanage port -l | grep -w 9000`。只有它已归属 `http_port_t` 时才可继续；若归属其他类型，
+停止部署并选择新端口，不得用 `semanage port -m` 抢占。
 
 不要关闭 SELinux，也不要开放 9100。
 
@@ -118,7 +121,11 @@ sudo semanage port -m -t http_port_t -p tcp 9000
 sudo install -o root -g root -m 0644 deploy/el9/nginx-bootstrap.conf \
   /etc/nginx/conf.d/wechat-memory-license.conf
 sudo nginx -t
-sudo systemctl enable --now nginx
+if sudo systemctl is-active --quiet nginx; then
+  sudo systemctl reload nginx
+else
+  sudo systemctl enable --now nginx
+fi
 ```
 
 从服务器外部访问以下地址应返回 404，但必须能建立 HTTP 连接：
@@ -127,26 +134,109 @@ sudo systemctl enable --now nginx
 http://104.224.90.172/.well-known/acme-challenge/probe
 ```
 
-### 6.2 先测试 CA，再签发正式证书
+### 6.2 多业务服务器的无损 ACME 排错
+
+如果 Certbot 报 `Fetching http://<IP>/.well-known/acme-challenge/...: Connection refused`，
+请先停止重试签发。这表示 CA 还没有进入 webroot 文件校验阶段；应先确认公网 IP、
+Nginx 80 端口和入站防火墙。若服务器同时托管其他站点，不得删除、覆盖或改写其他
+`/etc/nginx/conf.d/*.conf`；Nginx 可以根据 `server_name` 使多个 80 端口虚拟主机并存。
+
+先执行只读核对：
+
+```bash
+PUBLIC_IP=104.224.90.172
+PUBLIC_IF="$(ip -4 route show default | awk 'NR == 1 { print $5 }')"
+PUBLIC_ZONE="$(firewall-cmd --get-zone-of-interface="${PUBLIC_IF}")"
+if [ -z "${PUBLIC_ZONE}" ] || [ "${PUBLIC_ZONE}" = "no zone" ]; then
+  PUBLIC_ZONE="$(firewall-cmd --get-default-zone)"
+fi
+
+printf 'default-interface=%s\nfirewalld-zone=%s\n' "${PUBLIC_IF}" "${PUBLIC_ZONE}"
+ip -4 -brief address show scope global
+ip -4 route get 1.1.1.1
+curl -4 --fail --silent --show-error --max-time 10 https://api.ipify.org
+printf '\n'
+
+sudo nginx -t
+sudo systemctl is-active nginx
+sudo ss -ltnp '( sport = :80 )'
+sudo nginx -T 2>&1 | grep -E 'configuration file|listen .*80|server_name'
+sudo firewall-cmd --zone="${PUBLIC_ZONE}" --query-service=http
+sudo firewall-cmd --zone="${PUBLIC_ZONE}" --list-all
+```
+
+`ip address` 显示的地址可能是云服务商的内网地址；`api.ipify.org` 只能说明出站 NAT
+地址，也不能单独证明入站 IP 已绑定。最终以云平台实例的公网 IPv4/EIP 绑定为准。
+例如现有业务配置使用 `104.244.90.172`，而本服务计划使用
+`104.224.90.172`，必须先在云平台核对两个地址的归属，不得用修改现有站点配置
+的方式“试错”。
+
+只有在 Nginx 配置通过、服务处于 `active`、`ss` 确认 80 端口监听后，才针对公网
+网卡实际所属 zone 精确开放 HTTP；不需要 reload firewalld，也不改动其他规则：
+
+```bash
+sudo firewall-cmd --zone="${PUBLIC_ZONE}" --add-service=http
+sudo firewall-cmd --zone="${PUBLIC_ZONE}" --permanent --add-service=http
+sudo firewall-cmd --zone="${PUBLIC_ZONE}" --query-service=http
+sudo firewall-cmd --zone="${PUBLIC_ZONE}" --permanent --query-service=http
+```
+
+再为 WeChatMemory 的独立 webroot 放置一个临时探针，不触碰其他站点：
+
+```bash
+sudo install -d -o nginx -g nginx -m 0755 \
+  /var/www/wechat-memory-license-acme/.well-known/acme-challenge
+printf '%s\n' 'wechat-memory-acme-ok' | sudo tee \
+  /var/www/wechat-memory-license-acme/.well-known/acme-challenge/wkm-probe.txt >/dev/null
+sudo chmod 0644 \
+  /var/www/wechat-memory-license-acme/.well-known/acme-challenge/wkm-probe.txt
+sudo restorecon -RF /var/www/wechat-memory-license-acme
+
+curl --fail --show-error --max-time 5 \
+  -H "Host: ${PUBLIC_IP}" \
+  http://127.0.0.1/.well-known/acme-challenge/wkm-probe.txt
+```
+
+本机探针必须精确返回 `wechat-memory-acme-ok`。然后从服务器之外的电脑或移动网络执行：
+
+```bash
+curl --fail --show-error --max-time 10 \
+  http://104.224.90.172/.well-known/acme-challenge/wkm-probe.txt
+```
+
+如果本机成功、外部仍是 `connection refused`，问题位于主机外部：核对云安全组/入站
+ACL、EIP 绑定、NAT/端口转发和上游防火墙，只新增目标实例的 `TCP/80` 公网入站规则。
+未完成外部探针前不得继续 Certbot，避免触发 CA 失败限额。完成证书签发后可删除
+`wkm-probe.txt`，但必须保留 80 端口和 ACME location 以用于自动续期。
+
+### 6.3 先测试 CA，再签发正式证书
 
 先使用 staging，避免排错时触发正式环境限制：
 
 ```bash
-sudo /opt/certbot/bin/certbot certonly --staging --non-interactive \
+sudo /opt/wechat-memory-license-certbot/bin/certbot certonly --staging --non-interactive \
+  --agree-tos --email 'gladlygrady@tutamail.com' \
+  --preferred-profile shortlived \
+  --webroot --webroot-path /var/www/wechat-memory-license-acme \
+  --ip-address 104.224.90.172 --cert-name 104.224.90.172-staging
+```
+
+staging 使用独立的 cert-name，避免 Certbot 把未到期的测试证书当成正式证书线继续复用。
+测试成功后再签发正式证书：
+
+```bash
+sudo /opt/wechat-memory-license-certbot/bin/certbot certonly --non-interactive \
   --agree-tos --email 'gladlygrady@tutamail.com' \
   --preferred-profile shortlived \
   --webroot --webroot-path /var/www/wechat-memory-license-acme \
   --ip-address 104.224.90.172 --cert-name 104.224.90.172
 ```
 
-staging 成功后删除 `--staging`，再次运行同一命令签发正式证书：
+正式证书已验证可用后，可以删除隔离的 staging 线继：
 
 ```bash
-sudo /opt/certbot/bin/certbot certonly --non-interactive \
-  --agree-tos --email 'gladlygrady@tutamail.com' \
-  --preferred-profile shortlived \
-  --webroot --webroot-path /var/www/wechat-memory-license-acme \
-  --ip-address 104.224.90.172 --cert-name 104.224.90.172
+sudo /opt/wechat-memory-license-certbot/bin/certbot delete --non-interactive \
+  --cert-name 104.224.90.172-staging
 ```
 
 不得把 staging 证书用于客户端。正式证书应出现在：
@@ -181,27 +271,37 @@ openssl s_client -connect 104.224.90.172:9000 \
 ```bash
 sudo install -o root -g root -m 0755 deploy/el9/certbot-deploy-hook.sh \
   /usr/local/sbin/wkm-certbot-deploy
-sudo install -o root -g root -m 0644 deploy/el9/certbot-renew.service \
-  /etc/systemd/system/certbot-renew.service
-sudo install -o root -g root -m 0644 deploy/el9/certbot-renew.timer \
-  /etc/systemd/system/certbot-renew.timer
+sudo install -o root -g root -m 0644 deploy/el9/wechat-memory-certbot-renew.service \
+  /etc/systemd/system/wechat-memory-certbot-renew.service
+sudo install -o root -g root -m 0644 deploy/el9/wechat-memory-certbot-renew.timer \
+  /etc/systemd/system/wechat-memory-certbot-renew.timer
 sudo systemctl daemon-reload
-sudo systemctl enable --now certbot-renew.timer
-sudo systemctl list-timers certbot-renew.timer
+sudo systemctl enable --now wechat-memory-certbot-renew.timer
+sudo systemctl list-timers wechat-memory-certbot-renew.timer
 ```
+
+这些单元、hook 和 Certbot 虚拟环境全部使用 WeChatMemory 专属名称。它们不会覆盖其他站点的
+`certbot-renew.service/timer` 或 `/opt/certbot`，并且续期命令通过 `--cert-name 104.224.90.172`
+只处理本项目的证书线。
+
+若旧版 WeChatMemory 曾安装通用名称的 `certbot-renew.timer`，不要直接删除或停用。先执行
+`systemctl cat certbot-renew.service certbot-renew.timer`，再查明同机其他证书由哪个 timer 续期。只有
+确认通用单元是旧 WeChatMemory 专用且其他证书已有独立续期机制后，才在单独维护窗口
+迁移它。新部署器不会自动改写这些通用单元。
 
 立即进行一次模拟续期：
 
 ```bash
-sudo /opt/certbot/bin/certbot renew --dry-run \
+sudo /opt/wechat-memory-license-certbot/bin/certbot renew --dry-run \
+  --cert-name 104.224.90.172 \
   --deploy-hook /usr/local/sbin/wkm-certbot-deploy
 ```
 
 日常检查：
 
 ```bash
-sudo systemctl status certbot-renew.timer
-sudo journalctl -u certbot-renew.service --since '24 hours ago'
+sudo systemctl status wechat-memory-certbot-renew.timer
+sudo journalctl -u wechat-memory-certbot-renew.service --since '24 hours ago'
 sudo openssl x509 -in /etc/letsencrypt/live/104.224.90.172/cert.pem \
   -noout -issuer -subject -dates
 ```
@@ -227,7 +327,7 @@ git rev-parse --short HEAD
 
 ### 9.2 首次部署生产签名私钥
 
-客户端 `0.3.2` 生成信任根中的生产公钥必须与服务器私钥一致。将开发端忽略目录中的
+客户端 `0.3.3` 生成信任根中的生产公钥必须与服务器私钥一致。将开发端忽略目录中的
 `.secrets/signing-ed25519.pem` 通过受控通道上传为 `/root/wkm-signing-ed25519.pem`，不能经过 Git、聊天工具或工单传输。
 
 在服务器核对权限：
@@ -246,12 +346,12 @@ sudo bash deploy/el9/install-release.sh \
 
 脚本会：
 
-1. 创建 `wkm-license` 用户和受限目录；
-2. 复制不可变 release，建立 Python 3.11 虚拟环境并安装 Waitress/Flask/cryptography；
-3. 校验跟踪的公钥清单，把私钥安装到 `/etc/wechat-memory-license/signing-ed25519-2026-10-30.pem`；
-4. 创建 `service.env`，写入公钥清单路径，初始化 SQLite schema v2 和套餐；
-5. 安装 systemd unit，原子切换 `current`，启动后检查 `/readyz`；
-6. 升级时使用 SQLite `.backup` 创建并校验完整备份。
+1. 创建 `wkm-license` 用户和受限目录，复制不可变 release 源码并验证文档契约；
+2. 升级时使用 SQLite `.backup` 创建并校验完整备份；
+3. 拒绝含私钥标记的候选包，在 release 内建立独立 Python 3.11 `.venv`，安装依赖、检查依赖闭包、对比精确 SPDX SBOM，并通过严格编译、服务端全测、全部 EL9 Shell 语法与部署事务自测；
+4. 校验跟踪的公钥清单，把私钥安装到 `/etc/wechat-memory-license/signing-ed25519-2026-10-30.pem`；
+5. 快照当前应用运行态，写入候选 `service.env`，再初始化或迁移 SQLite schema 和套餐；
+6. 安装 systemd unit，原子切换 `current`，启动后检查仅本机可访问的 `/readyz/deep`。
 
 私钥安装成功后，从 `/root` 清理临时上传副本前，先确认
 `/etc/wechat-memory-license/signing-ed25519-2026-10-30.pem` 可用且权限为 `0640 root:wkm-license`。
@@ -262,7 +362,7 @@ sudo bash deploy/el9/install-release.sh \
 sudo systemctl status wechat-memory-license --no-pager
 sudo journalctl -u wechat-memory-license -n 100 --no-pager
 curl --fail --silent http://127.0.0.1:9100/healthz
-curl --fail --silent http://127.0.0.1:9100/readyz
+curl --fail --silent http://127.0.0.1:9100/readyz/deep
 curl --fail --silent http://127.0.0.1:9100/v1/keys
 sudo -u wkm-license sqlite3 /var/lib/wechat-memory-license/license.sqlite3 \
   'PRAGMA integrity_check; PRAGMA user_version;'
@@ -273,7 +373,7 @@ sudo -u wkm-license sqlite3 /var/lib/wechat-memory-license/license.sqlite3 \
 ### 9.4 创建首个客户端用户
 
 ```bash
-sudo -u wkm-license /opt/wechat-memory-license/venv/bin/python \
+sudo -u wkm-license /opt/wechat-memory-license/current/.venv/bin/python \
   /opt/wechat-memory-license/current/register_user.py add \
   --db /var/lib/wechat-memory-license/license.sqlite3 \
   --username example-user --plan permanent_personal
@@ -296,13 +396,14 @@ curl --fail --silent --show-error https://104.224.90.172:9000/v1/keys
 每次发布：
 
 1. 在隔离构建环境生成带版本号的发布包并校验 SHA-256；
-2. 上传到新的 `releases/<版本>`，所有者为 `root:root`，应用代码只读；
+2. 上传到新的 release 目录，在其自身 `.venv` 安装和验证候选依赖，不修改当前 release；
 3. 用副本数据库运行迁移测试和完整性检查；
 4. 使用 SQLite `.backup` 备份当前数据库，单独保留匹配配置，并完成一次完整性验证；
-5. 停止应用，执行受版本控制的迁移，切换 `current`；
-6. 启动应用，检查本机 `127.0.0.1:9100/healthz`；
-7. 检查公网 `https://104.224.90.172:9000/healthz`；
-8. 失败时停止应用、恢复上一版代码和匹配的数据库备份，再次验证。
+5. 执行受版本控制的 migration，原子切换 `current`，并重启服务；
+6. 检查本机 `127.0.0.1:9100/readyz/deep`，通过后才切换 Nginx；
+7. 检查公网 `https://104.224.90.172:9000/readyz` 和 `/v1/keys`；
+8. 失败时恢复上一版 `current`、`service.env`、systemd 单元/服务状态与 Nginx 配置/服务状态；
+9. 不自动降级已执行的 SQLite migration。只有确认没有新写入并且已进入维护窗口时，才按恢复流程手工使用升级前备份。
 
 SQLite 备份必须使用 SQLite Online Backup API 或 `sqlite3 .backup`，不能在运行时直接复制单独的
 `.sqlite3` 文件。备份要加密并异地保存，且定期实际恢复验证。

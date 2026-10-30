@@ -19,6 +19,15 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from license_server.maintenance import (
+    DEFAULT_REFRESH_SESSION_BATCH_SIZE,
+    DEFAULT_REFRESH_SESSION_MAX_BATCHES,
+    DEFAULT_REFRESH_SESSION_RETENTION_DAYS,
+    MaintenanceError,
+    has_prunable_refresh_sessions,
+    prune_refresh_sessions_batch,
+    validate_prune_limits,
+)
 from register_user import (
     PLAN_IDS,
     RegistrationError,
@@ -38,6 +47,7 @@ from register_user import (
 ENTITLEMENT_STATUSES = ("active", "suspended", "expired", "revoked")
 CUSTOMER_STATUSES = ("active", "disabled")
 DEVICE_STATUSES = ("active", "deactivated", "blocked")
+MAX_REFRESH_SESSION_RETENTION_DAYS = 3650
 
 
 def _actor() -> str:
@@ -181,6 +191,85 @@ def show_user(db_path: Path, username: str) -> dict[str, Any]:
     try:
         ensure_schema(con)
         return _summary(con, _customer(con, username))
+    finally:
+        con.close()
+
+
+def prune_refresh_sessions(
+    db_path: Path,
+    *,
+    retention_days: int = DEFAULT_REFRESH_SESSION_RETENTION_DAYS,
+    batch_size: int = DEFAULT_REFRESH_SESSION_BATCH_SIZE,
+    max_batches: int = DEFAULT_REFRESH_SESSION_MAX_BATCHES,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Prune a bounded number of old rotated/revoked refresh sessions."""
+
+    if not 1 <= retention_days <= MAX_REFRESH_SESSION_RETENTION_DAYS:
+        raise RegistrationError(
+            f"--retention-days 必须在 1～{MAX_REFRESH_SESSION_RETENTION_DAYS} 之间"
+        )
+    try:
+        validate_prune_limits(batch_size, max_batches)
+    except MaintenanceError as exc:
+        raise RegistrationError(str(exc)) from exc
+    now_dt = now or utc_now()
+    if now_dt.tzinfo is None:
+        raise RegistrationError("清理基准时间必须包含时区")
+    cutoff = iso(now_dt - timedelta(days=retention_days))
+    totals = {"rotated": 0, "revoked": 0}
+    completed_batches = 0
+
+    con = connect(db_path)
+    try:
+        ensure_schema(con)
+        for _ in range(max_batches):
+            try:
+                con.execute("BEGIN IMMEDIATE")
+                result = prune_refresh_sessions_batch(
+                    con,
+                    cutoff=cutoff,
+                    batch_size=batch_size,
+                )
+                if result.deleted:
+                    _audit(
+                        con,
+                        "refresh_sessions.pruned",
+                        "refresh_sessions",
+                        "retention",
+                        {
+                            "cutoff": cutoff,
+                            "rotated": result.rotated,
+                            "revoked": result.revoked,
+                            "batch_size": batch_size,
+                        },
+                        iso(now_dt),
+                    )
+                con.commit()
+            except Exception:
+                con.rollback()
+                raise
+            if not result.deleted:
+                break
+            completed_batches += 1
+            totals["rotated"] += result.rotated
+            totals["revoked"] += result.revoked
+            if result.deleted < batch_size:
+                break
+
+        more_remaining = has_prunable_refresh_sessions(con, cutoff=cutoff)
+        harden_file(db_path)
+        return {
+            "retention_days": retention_days,
+            "cutoff": cutoff,
+            "batch_size": batch_size,
+            "max_batches": max_batches,
+            "batches": completed_batches,
+            "deleted": totals["rotated"] + totals["revoked"],
+            "deleted_rotated": totals["rotated"],
+            "deleted_revoked": totals["revoked"],
+            "more_remaining": more_remaining,
+        }
     finally:
         con.close()
 
@@ -660,6 +749,26 @@ def parser() -> argparse.ArgumentParser:
     device.add_argument("--username", required=True)
     device.add_argument("--device-id", required=True)
     device.add_argument("--status", required=True, choices=DEVICE_STATUSES)
+
+    prune = commands.add_parser(
+        "prune-refresh-sessions",
+        help="按固定批次清理超过保留期的 rotated/revoked 刷新会话",
+    )
+    prune.add_argument(
+        "--retention-days",
+        type=int,
+        default=DEFAULT_REFRESH_SESSION_RETENTION_DAYS,
+    )
+    prune.add_argument(
+        "--batch-size",
+        type=int,
+        default=DEFAULT_REFRESH_SESSION_BATCH_SIZE,
+    )
+    prune.add_argument(
+        "--max-batches",
+        type=int,
+        default=DEFAULT_REFRESH_SESSION_MAX_BATCHES,
+    )
     return root
 
 
@@ -682,6 +791,14 @@ def _human(result: dict[str, Any]) -> None:
         return
     if "database" in result:
         print(f"数据库已初始化：{result['database']}")
+        return
+    if "deleted_rotated" in result:
+        print(
+            "刷新会话清理完成："
+            f"删除 {result['deleted']} 条（rotated={result['deleted_rotated']}，"
+            f"revoked={result['deleted_revoked']}），批次 {result['batches']}，"
+            f"仍有待清理={'是' if result['more_remaining'] else '否'}"
+        )
         return
     if "username" in result:
         print(f"用户：{result['username']}")
@@ -751,9 +868,16 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "devices":
             result = list_devices(args.db, args.username)
-        else:
+        elif args.command == "device-status":
             result = set_device_status(
                 args.db, args.username, args.device_id, args.status
+            )
+        else:
+            result = prune_refresh_sessions(
+                args.db,
+                retention_days=args.retention_days,
+                batch_size=args.batch_size,
+                max_batches=args.max_batches,
             )
         if args.json:
             print(json.dumps(result, ensure_ascii=False, indent=2))

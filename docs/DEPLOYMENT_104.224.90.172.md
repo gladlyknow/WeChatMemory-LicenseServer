@@ -95,6 +95,9 @@ header。反向代理访问日志必须过滤 Authorization、Cookie、激活码
   "refresh_after": "2026-10-17T18:00:00Z",
   "refresh_token": "wkmr_...",
   "ticket": {
+    "device_id": "4cf3...",
+    "install_id": "客户端随机安装标识",
+    "device_hash": "64位小写十六进制匿名设备摘要",
     "plan": "pro_subscription",
     "capabilities": ["realtime_sync", "multi_account", "batch_export"],
     "offline_until": "2026-11-16T12:00:00Z",
@@ -104,8 +107,9 @@ header。反向代理访问日志必须过滤 Authorization、Cookie、激活码
 }
 ```
 
-`ticket.signature` 覆盖 ticket 全部其他字段。客户端必须验证签名票据、`audience`、`issuer`、`install_id`、`not_before`、`expires_at` 和
-`key_id`。
+`ticket.signature` 覆盖 ticket 全部其他字段。客户端必须验证签名票据、`audience`、`issuer`、
+`install_id`、`device_hash`、`not_before`、`expires_at` 和 `key_id`。服务端的 `device_hash` claim
+来自已验证的 `devices` 行；refresh/status 继续使用 refresh session 联接到的同一设备绑定，不采用任意请求值。
 
 ### 4.3 服务不可用或授权到期
 
@@ -120,16 +124,18 @@ header。反向代理访问日志必须过滤 Authorization、Cookie、激活码
 
 ```text
 GET  /healthz                         # 不泄露数据库路径或版本细节
-GET  /readyz                          # 仅供本机/监控访问
+GET  /readyz                          # 可公网监控的版本化最低 schema/可用性检查，受限流
+GET  /readyz/deep                     # 只允许 loopback 的 SQLite quick_check，Nginx 返回 404
 POST /v1/activate
 POST /v1/licenses/refresh
 GET  /v1/licenses/status
 POST /v1/devices/deactivate
-GET  /v1/time
-GET  /v1/keys                         # 只返回公钥与轮换元数据
+GET  /v1/time                         # 受应用限流
+GET  /v1/keys                         # 只返回公钥与轮换元数据，受应用限流
 ```
 
-当前实现限制 16 KiB 请求体，实施按 IP 滑动窗口限流，refresh token 每次成功使用都原子轮换。
+当前实现限制 16 KiB 请求体；除廉价 `/healthz` 与仅本机 `/readyz/deep` 外，公网 API 均实施
+按 IP 和进程全局滑动窗口限流。refresh token 每次成功使用都原子轮换。
 连续失败不会透露“用户名存在但激活码错误”还是“用户不存在”。后续多实例部署时需将内存限流迁移到共享后端。
 
 ## 6. SQLite3 运行要求

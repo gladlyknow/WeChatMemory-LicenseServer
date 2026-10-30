@@ -7,7 +7,7 @@ if [[ ${EUID} -ne 0 ]]; then
   exit 2
 fi
 
-PYTHON=/opt/wechat-memory-license/venv/bin/python
+PYTHON=/opt/wechat-memory-license/current/.venv/bin/python
 ADMIN=/opt/wechat-memory-license/current/license_admin.py
 DATABASE=/var/lib/wechat-memory-license/license.sqlite3
 ACTOR="${SUDO_USER:-root}"

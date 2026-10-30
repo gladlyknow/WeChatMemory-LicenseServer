@@ -3,6 +3,9 @@ __pycache__/
 .pytest_cache/
 .coverage
 .venv/
+build/
+dist/
+*.egg-info/
 data/
 *.sqlite3
 *.sqlite3-wal

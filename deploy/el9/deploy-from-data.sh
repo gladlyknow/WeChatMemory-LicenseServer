@@ -8,6 +8,7 @@ SIGNING_KEY="/root/wkm-signing-ed25519.pem"
 KEY_ID="2026-10-30"
 PUBLIC_IP="104.224.90.172"
 PUBLIC_PORT="9000"
+FIREWALL_ZONE=""
 UPDATE_SOURCE=1
 
 usage() {
@@ -23,6 +24,7 @@ usage() {
   --key-id ID              签名密钥 ID，默认 2026-10-30
   --public-ip IP           默认 104.224.90.172
   --public-port PORT       默认 9000
+  --firewall-zone ZONE     多 firewalld zone 主机的公网 zone
   --skip-update            不从 origin/main 执行 fast-forward 更新
 
 脚本只接受干净的 main 工作树。它不生成、输出或提交私钥。
@@ -37,6 +39,7 @@ while [[ $# -gt 0 ]]; do
     --key-id) KEY_ID="$2"; shift 2 ;;
     --public-ip) PUBLIC_IP="$2"; shift 2 ;;
     --public-port) PUBLIC_PORT="$2"; shift 2 ;;
+    --firewall-zone) FIREWALL_ZONE="$2"; shift 2 ;;
     --skip-update) UPDATE_SOURCE=0; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "未知参数：$1" >&2; usage >&2; exit 2 ;;
@@ -77,6 +80,9 @@ arguments=(
 )
 if [[ -f "${SIGNING_KEY}" ]]; then
   arguments+=(--signing-key "${SIGNING_KEY}")
+fi
+if [[ -n "${FIREWALL_ZONE}" ]]; then
+  arguments+=(--firewall-zone "${FIREWALL_ZONE}")
 fi
 
 exec bash "${SOURCE_DIR}/deploy/el9/one-click-deploy.sh" "${arguments[@]}"
