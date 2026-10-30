@@ -201,7 +201,12 @@ class LicenseManager:
         now = utc_now()
         with self.database.read() as connection:
             row = self._session_row(connection, digest)
-            if not row or row["session_status"] != "active":
+            if (
+                not row
+                or row["session_status"] != "active"
+                or row["device_status"] != "active"
+                or parse_time(row["session_expires_at"]) <= now
+            ):
                 raise LicenseError("refresh_failed", status=401)
             return self._response(
                 row, row["username"], row["device_id"], row["install_id"], now

@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "algorithm": "Ed25519",
+  "encoding": "base64url-raw-no-padding",
+  "active_key_id": "2026-10-30",
+  "keys": [
+    {
+      "key_id": "2026-10-30",
+      "public_key": "Ls__5WpaOKrEbgz6SOytYlPn7F9HkHJFQzroh0Eb_Dc",
+      "raw_sha256": "f4dd27e3a4e926635a3925c44fa5aa270bd2b0b905c744e93b27c836e49aec7b",
+      "spki_sha256": "11c1e1a9475518e135753cc6ae21637695e9842840f05aed0bdbfa8e666073bf",
+      "status": "active"
+    }
+  ]
+}

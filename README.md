@@ -28,6 +28,10 @@
 [`docs/LICENSE_SERVER_ARCHITECTURE.md`](docs/LICENSE_SERVER_ARCHITECTURE.md)。
 一键部署、升级、新增用户、套餐调整、续期、停用、激活码重置、设备解绑和备份恢复见
 [`docs/ONE_CLICK_DEPLOY_AND_ADMIN.md`](docs/ONE_CLICK_DEPLOY_AND_ADMIN.md)。
+生产签名密钥的生成、幂等发布、客户端信任根同步、备份恢复和轮换见
+[`docs/SIGNING_KEY_OPERATIONS.md`](docs/SIGNING_KEY_OPERATIONS.md)。
+目标服务器的标准源码目录是 `/data/WeChatMemory-LicenseServer`，可从该目录执行
+`deploy/el9/deploy-from-data.sh`；证书通知邮箱默认为 `gladlygrady@tutamail.com`。
 
 本仓库是独立商业实现的起点。正式版权声明、EULA 和隐私政策须在权利链审计和法律复核后加入；
 当前不从 GPL 原型仓库复制客户端实现。
@@ -113,10 +117,13 @@ bash -n deploy/el9/*.sh deploy/el9/wkm-license-admin
 ## 本地 API 启动（仅开发）
 
 ```bash
-python -m license_server generate-key --output ./.secrets/dev.pem --key-id dev-1
+python -m license_server signing-key ensure \
+  --path ./.secrets/dev.pem --key-id dev-1 \
+  --manifest ./.secrets/dev-public-keys.json --publish --activate
 export DATABASE_PATH="$PWD/data/license.sqlite3"
 export SIGNING_PRIVATE_KEY_PATH="$PWD/.secrets/dev.pem"
 export SIGNING_KEY_ID=dev-1
+export SIGNING_PUBLIC_KEYS_PATH="$PWD/.secrets/dev-public-keys.json"
 python register_user.py init --db "$DATABASE_PATH"
 python -m license_server --host 127.0.0.1 --port 9100
 ```

@@ -13,7 +13,7 @@ from flask import Flask, Response, jsonify, request
 from . import __version__
 from .database import Database
 from .service import LicenseError, LicenseManager, LicenseSettings, require_text
-from .signing import TicketSigner
+from .signing import TicketSigner, manifest_for_signer
 
 
 class SlidingWindowLimiter:
@@ -44,9 +44,17 @@ def create_app(
     if signer is None:
         key_path = os.environ.get("SIGNING_PRIVATE_KEY_PATH", "")
         key_id = os.environ.get("SIGNING_KEY_ID", "")
-        if not key_path or not key_id:
-            raise RuntimeError("SIGNING_PRIVATE_KEY_PATH and SIGNING_KEY_ID are required")
-        signer = TicketSigner.load(Path(key_path), key_id)
+        manifest_path = os.environ.get("SIGNING_PUBLIC_KEYS_PATH", "")
+        if not key_path or not key_id or not manifest_path:
+            raise RuntimeError(
+                "SIGNING_PRIVATE_KEY_PATH, SIGNING_KEY_ID and "
+                "SIGNING_PUBLIC_KEYS_PATH are required"
+            )
+        signer, public_manifest = TicketSigner.load_verified(
+            Path(key_path), key_id, Path(manifest_path)
+        )
+    else:
+        public_manifest = manifest_for_signer(signer)
     database = Database(database_path)
     manager = LicenseManager(
         database,
@@ -113,17 +121,7 @@ def create_app(
 
     @app.get("/v1/keys")
     def keys() -> Response:
-        return jsonify(
-            {
-                "keys": [
-                    {
-                        "key_id": signer.key_id,
-                        "algorithm": "Ed25519",
-                        "public_key": signer.public_key_b64(),
-                    }
-                ]
-            }
-        )
+        return jsonify(public_manifest)
 
     @app.post("/v1/activate")
     def activate() -> Response:

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 if [[ ${EUID} -ne 0 ]]; then
   echo "请通过 sudo 或 root 执行 wkm-license-admin。" >&2

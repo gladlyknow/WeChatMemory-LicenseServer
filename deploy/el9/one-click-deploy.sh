@@ -4,10 +4,10 @@ umask 077
 
 PUBLIC_IP="104.224.90.172"
 PUBLIC_PORT="9000"
-SOURCE_DIR="$(pwd)"
-SIGNING_KEY=""
+SOURCE_DIR="/data/WeChatMemory-LicenseServer"
+SIGNING_KEY="/root/wkm-signing-ed25519.pem"
 KEY_ID="2026-10-30"
-EMAIL=""
+EMAIL="gladlygrady@tutamail.com"
 TLS_MODE="letsencrypt"
 EXISTING_CERT=""
 EXISTING_KEY=""
@@ -19,10 +19,10 @@ usage() {
 
 必要选项（首次部署）：
   --signing-key PATH       与客户端内置公钥配对的 Ed25519 私钥 PEM
-  --email ADDRESS          Let's Encrypt 通知邮箱
+  --email ADDRESS          Let's Encrypt 通知邮箱，默认 gladlygrady@tutamail.com
 
 常用选项：
-  --source PATH            当前服务端源码目录，默认当前目录
+  --source PATH            当前服务端源码目录，默认 /data/WeChatMemory-LicenseServer
   --public-ip IP           公网 IPv4，默认 104.224.90.172
   --public-port PORT       公网 HTTPS 端口，默认 9000
   --key-id ID              Ed25519 key id，默认 2026-10-30
@@ -75,7 +75,7 @@ if [[ "${TLS_MODE}" != "letsencrypt" && "${TLS_MODE}" != "existing" ]]; then
   echo "--tls-mode 只能是 letsencrypt 或 existing。" >&2
   exit 2
 fi
-if [[ ! "${KEY_ID}" =~ ^[A-Za-z0-9._-]{1,64}$ ]]; then
+if [[ ! "${KEY_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
   echo "--key-id 只能包含字母、数字、点、下划线和短横线。" >&2
   exit 2
 fi
@@ -97,8 +97,10 @@ if [[ "${VERSION_ID%%.*}" != "9" ]]; then
   echo "该脚本仅支持 Enterprise Linux 9，当前 VERSION_ID=${VERSION_ID:-unknown}。" >&2
   exit 3
 fi
-if [[ ! -f /etc/wechat-memory-license/signing-ed25519.pem && ! -f "${SIGNING_KEY}" ]]; then
-  echo "首次部署必须提供 --signing-key。" >&2
+VERSIONED_KEY="/etc/wechat-memory-license/signing-ed25519-${KEY_ID}.pem"
+LEGACY_KEY=/etc/wechat-memory-license/signing-ed25519.pem
+if [[ ! -f "${VERSIONED_KEY}" && ! -f "${LEGACY_KEY}" && ! -f "${SIGNING_KEY}" ]]; then
+  echo "找不到 key-id=${KEY_ID} 的私钥；首次部署默认从 /root/wkm-signing-ed25519.pem 读取。" >&2
   exit 3
 fi
 
@@ -198,10 +200,11 @@ if [[ "${TLS_MODE}" == "letsencrypt" ]]; then
   systemctl enable --now certbot-renew.timer
 fi
 
-curl --fail --silent --show-error http://127.0.0.1:9100/readyz >/dev/null
-curl --fail --silent --show-error \
+curl --fail --silent --show-error --connect-timeout 3 --max-time 15 \
+  http://127.0.0.1:9100/readyz >/dev/null
+curl --fail --silent --show-error --connect-timeout 5 --max-time 20 \
   "https://${PUBLIC_IP}:${PUBLIC_PORT}/readyz" >/dev/null
-PUBLIC_KEY_JSON="$(curl --fail --silent --show-error \
+PUBLIC_KEY_JSON="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 20 \
   "https://${PUBLIC_IP}:${PUBLIC_PORT}/v1/keys")"
 
 echo

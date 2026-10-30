@@ -28,7 +28,8 @@ flowchart LR
 3. `104.224.90.172` 直接绑定当前服务器，80 端口没有被其他代理占用；
 4. 已通过 SSH 登录，当前账号具备 `sudo` 权限；
 5. 已准备运维邮箱；
-6. 已把与客户端公钥配对的 Ed25519 私钥安全上传到服务器，例如：
+6. 证书通知与运维邮箱为 `gladlygrady@tutamail.com`；
+7. 已把与客户端公钥配对的 Ed25519 私钥安全上传到服务器，例如：
 
 ```text
 /root/wkm-signing-ed25519.pem
@@ -41,6 +42,24 @@ sudo chown root:root /root/wkm-signing-ed25519.pem
 sudo chmod 0600 /root/wkm-signing-ed25519.pem
 ```
 
+若匹配私钥尚在受控 Ubuntu 开发机的 `.secrets` 目录，可通过已验证的 SSH
+通道分两步暂存和安装。下面命令不会在目标已存在时覆盖它：
+
+```bash
+# 只在保存匹配私钥的 Ubuntu 开发机上执行
+scp WeChatMemory-LicenseServer/.secrets/signing-ed25519.pem \
+  root@104.224.90.172:/root/.wkm-signing-ed25519.upload
+ssh root@104.224.90.172 \
+  'set -eu; umask 077; trap "rm -f /root/.wkm-signing-ed25519.upload" EXIT; \
+   test ! -e /root/wkm-signing-ed25519.pem; \
+   openssl pkey -in /root/.wkm-signing-ed25519.upload -check -noout; \
+   install -o root -g root -m 0600 /root/.wkm-signing-ed25519.upload \
+     /root/wkm-signing-ed25519.pem'
+```
+
+如果第二步因目标已存在而退出，不要删除或覆盖旧文件；先执行公钥指纹核对。
+暂存 `.upload` 文件会由远程 `trap` 在成功或失败时清理。
+
 Let's Encrypt 的 IP 地址证书必须使用短期证书配置。Certbot 需要 5.4 或更高版本；本仓库默认固定
 `5.9.0`。证书约 160 小时有效，续期自动化是生产必需条件。官方说明：
 
@@ -49,39 +68,63 @@ Let's Encrypt 的 IP 地址证书必须使用短期证书配置。Certbot 需要
 
 ## 3. 首次一键部署
 
-### 3.1 获取服务器代码
+### 3.1 获取服务器代码到 `/data`
 
 在服务器 SSH 终端执行：
 
 ```bash
-cd /root
-git clone https://github.com/gladlyknow/WeChatMemory-LicenseServer.git
-cd /root/WeChatMemory-LicenseServer
+sudo install -d -o root -g root -m 0755 /data
+sudo git clone https://github.com/gladlyknow/WeChatMemory-LicenseServer.git \
+  /data/WeChatMemory-LicenseServer
+cd /data/WeChatMemory-LicenseServer
 git status --short
 git rev-parse --short HEAD
 ```
 
 私有仓库应使用只具备该仓库读取权限的 deploy key 或 fine-grained token，不要使用个人全权限 token。
 
-### 3.2 执行一键部署
+`/data/WeChatMemory-LicenseServer` 是可审计的源码检出目录，不存放生产私钥、
+SQLite 数据库或运行日志。实际发布版、状态和密钥仍分别位于 `/opt`、`/var/lib`和
+`/etc`，避免 `git pull` 触及生产数据。
 
-把邮箱替换为真实运维邮箱：
+### 3.2 从 `/data` 执行一键部署（推荐）
 
 ```bash
-cd /root/WeChatMemory-LicenseServer
+cd /data/WeChatMemory-LicenseServer
+
+sudo bash deploy/el9/deploy-from-data.sh \
+  --signing-key /root/wkm-signing-ed25519.pem
+```
+
+该入口默认执行 `origin/main` fast-forward，并固定：
+
+- 源码目录：`/data/WeChatMemory-LicenseServer`；
+- 运维邮箱：`gladlygrady@tutamail.com`；
+- 公网入口：`104.224.90.172:9000`；
+- 分支：`main`；
+- 只允许干净工作树。
+
+如果已在 SSH 会话中人工审核并更新代码，可加 `--skip-update`。
+
+### 3.3 直接执行底层部署器
+
+底层入口也可显式传入已确认的运维邮箱：
+
+```bash
+cd /data/WeChatMemory-LicenseServer
 
 sudo bash deploy/el9/one-click-deploy.sh \
   --source "$PWD" \
   --signing-key /root/wkm-signing-ed25519.pem \
   --key-id 2026-10-30 \
-  --email ops@example.com \
+  --email gladlygrady@tutamail.com \
   --public-ip 104.224.90.172 \
   --public-port 9000
 ```
 
 脚本会自动完成：
 
-1. 校验 EL9、IPv4、端口、源码和签名私钥；
+1. 校验 EL9、IPv4、端口、源码，并反向计算签名私钥的公钥，确认它与仓库跟踪的公开清单一致；
 2. 安装 Nginx、SQLite、Python 3.11、firewalld、SELinux 工具、Certbot；
 3. 创建 `wkm-license` 无登录系统账号；
 4. 配置防火墙、SELinux 和 ACME webroot；
@@ -96,7 +139,7 @@ sudo bash deploy/el9/one-click-deploy.sh \
 脚本不会删除已经存在的数据库。升级前会先通过 SQLite `.backup` 创建一致性备份，健康检查失败时会
 尝试切回上一版代码。
 
-### 3.3 使用已有受信任证书
+### 3.4 使用已有受信任证书
 
 如果已经有包含该公网 IP SAN 的正式证书：
 
@@ -155,19 +198,17 @@ sudo openssl x509 \
 ## 5. 后续升级
 
 ```bash
-cd /root/WeChatMemory-LicenseServer
+cd /data/WeChatMemory-LicenseServer
 git pull --ff-only origin main
 git rev-parse --short HEAD
 
-sudo bash deploy/el9/one-click-deploy.sh \
-  --source "$PWD" \
-  --key-id 2026-10-30 \
-  --public-ip 104.224.90.172 \
-  --public-port 9000
+sudo bash deploy/el9/deploy-from-data.sh
 ```
 
 签名私钥和证书已经安装后不需要再次传入。不要随意更换 `key-id` 或签名私钥；客户端必须提前内置
 对应公钥，才能完成安全轮换。
+完整的密钥创建、公开清单发布、客户端同步、备份和轮换步骤见
+[`SIGNING_KEY_OPERATIONS.md`](SIGNING_KEY_OPERATIONS.md)。
 
 ## 6. 用户管理入口
 
@@ -427,7 +468,7 @@ sudo -u wkm-license sqlite3 /var/lib/wechat-memory-license/license.sqlite3 \
 | `/opt/wechat-memory-license/current` | 当前版本符号链接 |
 | `/opt/wechat-memory-license/venv` | 服务端 Python 环境 |
 | `/etc/wechat-memory-license/service.env` | 服务配置 |
-| `/etc/wechat-memory-license/signing-ed25519.pem` | Ed25519 私钥 |
+| `/etc/wechat-memory-license/signing-ed25519-<key-id>.pem` | 按 key-id 版本化的 Ed25519 私钥 |
 | `/var/lib/wechat-memory-license/license.sqlite3` | 授权数据库 |
 | `/var/lib/wechat-memory-license/backups/` | 本机一致性备份 |
 | `/usr/local/sbin/wkm-license-admin` | 用户管理入口 |

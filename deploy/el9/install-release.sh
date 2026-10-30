@@ -14,12 +14,16 @@ if [[ -z "${SOURCE_DIR}" || ! -f "${SOURCE_DIR}/pyproject.toml" ]]; then
   echo "用法：$0 <已上传的源码目录> [首次部署的 Ed25519 PEM] [key-id]" >&2
   exit 2
 fi
+if [[ ! "${KEY_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+  echo "key-id 不合法。" >&2
+  exit 2
+fi
 
 APP_ROOT=/opt/wechat-memory-license
 STATE_ROOT=/var/lib/wechat-memory-license
 CONFIG_ROOT=/etc/wechat-memory-license
 LOG_ROOT=/var/log/wechat-memory-license
-RELEASE_ID="$(date -u +%Y%m%dT%H%M%SZ)"
+RELEASE_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 RELEASE_DIR="${APP_ROOT}/releases/${RELEASE_ID}"
 CURRENT_LINK="${APP_ROOT}/current"
 PREVIOUS_TARGET=""
@@ -34,9 +38,39 @@ install -d -o wkm-license -g wkm-license -m 0700 "${STATE_ROOT}" "${STATE_ROOT}/
 install -d -o wkm-license -g wkm-license -m 0750 "${LOG_ROOT}"
 install -d -o root -g root -m 0755 "${RELEASE_DIR}"
 
-cp -a "${SOURCE_DIR}/." "${RELEASE_DIR}/"
-rm -rf "${RELEASE_DIR}/.git" "${RELEASE_DIR}/.venv" "${RELEASE_DIR}/.secrets" \
-  "${RELEASE_DIR}/__pycache__" "${RELEASE_DIR}/tests/__pycache__"
+GIT_TOPLEVEL="$(git -C "${SOURCE_DIR}" rev-parse --show-toplevel 2>/dev/null || true)"
+if [[ "${GIT_TOPLEVEL}" == "${SOURCE_DIR}" ]]; then
+  # A clean Git object database is a stronger release boundary than copying a
+  # worktree: ignored local secrets and databases never enter the stream.
+  git -C "${SOURCE_DIR}" archive --format=tar HEAD | \
+    tar -C "${RELEASE_DIR}" -xf -
+else
+  # Uploaded source bundles may intentionally omit .git.  Keep this fallback
+  # fail-safe by excluding both common build state and every private-key form.
+  tar -C "${SOURCE_DIR}" \
+    --exclude='./.git' \
+    --exclude='./.venv' \
+    --exclude='./.secrets' \
+    --exclude='./.pytest_cache' \
+    --exclude='./.mypy_cache' \
+    --exclude='./.env' \
+    --exclude='./data' \
+    --exclude='./backups' \
+    --exclude='./certs' \
+    --exclude='./build' \
+    --exclude='./dist' \
+    --exclude='__pycache__' \
+    --exclude='*.py[co]' \
+    --exclude='*.sqlite3*' \
+    --exclude='*.db' \
+    --exclude='*.log' \
+    --exclude='*.pem' \
+    --exclude='*.key' \
+    --exclude='*.p8' \
+    --exclude='*.p12' \
+    --exclude='*.pfx' \
+    -cf - . | tar -C "${RELEASE_DIR}" -xf -
+fi
 find "${RELEASE_DIR}" -type d -exec chmod 0755 {} +
 find "${RELEASE_DIR}" -type f -exec chmod 0644 {} +
 
@@ -62,33 +96,66 @@ if [[ -f "${DATABASE_PATH}" ]]; then
   chmod 0600 "${BACKUP_PATH}"
 fi
 
-KEY_PATH="${CONFIG_ROOT}/signing-ed25519.pem"
-if [[ ! -f "${KEY_PATH}" ]]; then
-  if [[ -z "${STAGED_KEY}" || ! -f "${STAGED_KEY}" ]]; then
-    echo "首次部署必须提供与客户端内置公钥配对的私钥 PEM。" >&2
+MANIFEST_PATH="${RELEASE_DIR}/config/signing-public-keys.json"
+KEY_PATH="${CONFIG_ROOT}/signing-ed25519-${KEY_ID}.pem"
+LEGACY_KEY_PATH="${CONFIG_ROOT}/signing-ed25519.pem"
+KEY_SOURCE=""
+if [[ -f "${KEY_PATH}" ]]; then
+  KEY_SOURCE="${KEY_PATH}"
+  if [[ -n "${STAGED_KEY}" && -f "${STAGED_KEY}" ]] && \
+      ! cmp -s -- "${STAGED_KEY}" "${KEY_PATH}"; then
+    echo "同一 key-id 已安装不同私钥，拒绝覆盖。" >&2
     exit 3
   fi
-  install -o root -g wkm-license -m 0640 "${STAGED_KEY}" "${KEY_PATH}"
+elif [[ -n "${STAGED_KEY}" && -f "${STAGED_KEY}" ]]; then
+  KEY_SOURCE="${STAGED_KEY}"
+elif [[ -f "${LEGACY_KEY_PATH}" ]]; then
+  KEY_SOURCE="${LEGACY_KEY_PATH}"
+else
+  echo "找不到 key-id=${KEY_ID} 的 Ed25519 私钥。" >&2
+  exit 3
+fi
+
+"${APP_ROOT}/venv/bin/python" -m license_server signing-key verify \
+  --path "${KEY_SOURCE}" --key-id "${KEY_ID}" --manifest "${MANIFEST_PATH}" >/dev/null
+if [[ ! -f "${KEY_PATH}" ]]; then
+  install -o root -g wkm-license -m 0640 "${KEY_SOURCE}" "${KEY_PATH}"
 fi
 
 ENV_PATH="${CONFIG_ROOT}/service.env"
-if [[ ! -f "${ENV_PATH}" ]]; then
-  cat >"${ENV_PATH}" <<EOF
+ENV_ROLLBACK="${CONFIG_ROOT}/.service.env.rollback.${RELEASE_ID}"
+ENV_HAD_EXISTING=0
+if [[ -f "${ENV_PATH}" ]]; then
+  install -o root -g wkm-license -m 0640 "${ENV_PATH}" "${ENV_ROLLBACK}"
+  ENV_HAD_EXISTING=1
+fi
+env_value() {
+  local name="$1"
+  local fallback="$2"
+  local value=""
+  if [[ -f "${ENV_PATH}" ]]; then
+    value="$(sed -n "s/^${name}=//p" "${ENV_PATH}" | tail -n 1)"
+  fi
+  printf '%s' "${value:-${fallback}}"
+}
+ENV_TMP="${CONFIG_ROOT}/.service.env.${RELEASE_ID}.tmp"
+cat >"${ENV_TMP}" <<EOF
 PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
-APP_BIND=127.0.0.1
-APP_PORT=9100
+APP_BIND=$(env_value APP_BIND 127.0.0.1)
+APP_PORT=$(env_value APP_PORT 9100)
 DATABASE_PATH=${STATE_ROOT}/license.sqlite3
-LICENSE_ISSUER=wechat-memory-license
-LICENSE_AUDIENCE=wechat-memory-client
-REFRESH_TOKEN_DAYS=365
-LICENSE_TICKET_HOURS=24
-RATE_LIMIT_PER_MINUTE=20
+LICENSE_ISSUER=$(env_value LICENSE_ISSUER wechat-memory-license)
+LICENSE_AUDIENCE=$(env_value LICENSE_AUDIENCE wechat-memory-client)
+REFRESH_TOKEN_DAYS=$(env_value REFRESH_TOKEN_DAYS 365)
+LICENSE_TICKET_HOURS=$(env_value LICENSE_TICKET_HOURS 24)
+RATE_LIMIT_PER_MINUTE=$(env_value RATE_LIMIT_PER_MINUTE 20)
+LOG_LEVEL=$(env_value LOG_LEVEL INFO)
 SIGNING_KEY_ID=${KEY_ID}
 SIGNING_PRIVATE_KEY_PATH=${KEY_PATH}
+SIGNING_PUBLIC_KEYS_PATH=${CURRENT_LINK}/config/signing-public-keys.json
 EOF
-  chown root:wkm-license "${ENV_PATH}"
-  chmod 0640 "${ENV_PATH}"
-fi
+install -o root -g wkm-license -m 0640 "${ENV_TMP}" "${ENV_PATH}"
+rm -f -- "${ENV_TMP}"
 
 /usr/sbin/runuser -u wkm-license -- "${APP_ROOT}/venv/bin/python" \
   "${RELEASE_DIR}/register_user.py" init --db "${DATABASE_PATH}"
@@ -115,17 +182,40 @@ fi
 ln -sfn "${RELEASE_DIR}" "${CURRENT_LINK}.next"
 mv -Tf "${CURRENT_LINK}.next" "${CURRENT_LINK}"
 systemctl daemon-reload
-systemctl enable --now wechat-memory-license
-systemctl enable --now wechat-memory-license-backup.timer
-if ! curl --fail --silent --show-error http://127.0.0.1:9100/readyz >/dev/null; then
+rollback_runtime() {
   if [[ -n "${PREVIOUS_TARGET}" ]]; then
     ln -sfn "${PREVIOUS_TARGET}" "${CURRENT_LINK}.rollback"
     mv -Tf "${CURRENT_LINK}.rollback" "${CURRENT_LINK}"
-    systemctl restart wechat-memory-license
+  else
+    rm -f -- "${CURRENT_LINK}"
   fi
-  echo "健康检查失败，已尝试回滚。" >&2
+  if (( ENV_HAD_EXISTING )); then
+    install -o root -g wkm-license -m 0640 "${ENV_ROLLBACK}" "${ENV_PATH}"
+  else
+    rm -f -- "${ENV_PATH}"
+  fi
+  systemctl daemon-reload
+  if [[ -n "${PREVIOUS_TARGET}" ]]; then
+    systemctl restart wechat-memory-license || true
+  else
+    systemctl stop wechat-memory-license || true
+  fi
+  rm -f -- "${ENV_ROLLBACK}"
+}
+systemctl enable wechat-memory-license
+if ! systemctl restart wechat-memory-license; then
+  rollback_runtime
+  echo "授权服务启动失败，已尝试回滚代码和服务配置。" >&2
   exit 4
 fi
+systemctl enable --now wechat-memory-license-backup.timer
+if ! curl --fail --silent --show-error --connect-timeout 3 --max-time 15 \
+    http://127.0.0.1:9100/readyz >/dev/null; then
+  rollback_runtime
+  echo "健康检查失败，已尝试回滚代码和服务配置。" >&2
+  exit 4
+fi
+rm -f -- "${ENV_ROLLBACK}"
 
 echo "授权 API 已就绪：${RELEASE_DIR}"
 curl --silent http://127.0.0.1:9100/v1/keys

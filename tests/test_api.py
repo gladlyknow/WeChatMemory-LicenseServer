@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import base64
 import json
+import sqlite3
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from license_server.app import create_app
+from license_server.service import token_hash
 from license_server.signing import TicketSigner
 from license_admin import set_entitlement_status, set_plan
 from register_user import initialize_database, register_user
@@ -40,7 +43,7 @@ class LicenseApiTests(unittest.TestCase):
             "install_id": self.install_id,
             "device_hash": self.device_hash,
             "platform": "windows-amd64",
-            "app_version": "0.3.0",
+            "app_version": "0.3.2",
         }
         value.update(extra)
         return value
@@ -48,9 +51,13 @@ class LicenseApiTests(unittest.TestCase):
     def test_health_ready_and_public_key(self) -> None:
         self.assertEqual(self.client.get("/healthz").status_code, 200)
         self.assertEqual(self.client.get("/readyz").status_code, 200)
-        keys = self.client.get("/v1/keys").get_json()["keys"]
+        manifest = self.client.get("/v1/keys").get_json()
+        self.assertEqual(manifest["algorithm"], "Ed25519")
+        self.assertEqual(manifest["encoding"], "base64url-raw-no-padding")
+        keys = manifest["keys"]
         self.assertEqual(keys[0]["key_id"], "test-2026-01")
-        self.assertEqual(keys[0]["algorithm"], "Ed25519")
+        self.assertEqual(len(keys[0]["raw_sha256"]), 64)
+        self.assertEqual(len(keys[0]["spki_sha256"]), 64)
 
     def test_activation_returns_signed_ticket_and_rotating_refresh_token(self) -> None:
         activated = self.client.post(
@@ -79,7 +86,7 @@ class LicenseApiTests(unittest.TestCase):
                 "install_id": self.install_id,
                 "device_hash": self.device_hash,
                 "platform": "windows-amd64",
-                "app_version": "0.3.0",
+                "app_version": "0.3.2",
             },
         )
         self.assertEqual(refreshed.status_code, 200)
@@ -118,6 +125,32 @@ class LicenseApiTests(unittest.TestCase):
         )
         self.assertEqual(status.status_code, 401)
 
+    def test_status_rejects_expired_session_and_inactive_device(self) -> None:
+        body = self.client.post("/v1/activate", json=self.payload()).get_json()
+        refresh_digest = token_hash("refresh", body["refresh_token"])
+        expired = (
+            datetime.now(timezone.utc) - timedelta(seconds=1)
+        ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        with sqlite3.connect(self.database) as connection:
+            connection.execute(
+                "UPDATE refresh_sessions SET expires_at=? WHERE token_hash=?",
+                (expired, refresh_digest),
+            )
+        response = self.client.get(
+            "/v1/licenses/status",
+            headers={"Authorization": f"Bearer {body['refresh_token']}"},
+        )
+        self.assertEqual(response.status_code, 401)
+
+        second = self.client.post("/v1/activate", json=self.payload()).get_json()
+        with sqlite3.connect(self.database) as connection:
+            connection.execute("UPDATE devices SET status='blocked'")
+        response = self.client.get(
+            "/v1/licenses/status",
+            headers={"Authorization": f"Bearer {second['refresh_token']}"},
+        )
+        self.assertEqual(response.status_code, 401)
+
     def test_admin_changes_are_visible_on_the_next_client_refresh(self) -> None:
         activated = self.client.post("/v1/activate", json=self.payload()).get_json()
         set_plan(
@@ -135,7 +168,7 @@ class LicenseApiTests(unittest.TestCase):
                 "install_id": self.install_id,
                 "device_hash": self.device_hash,
                 "platform": "windows-amd64",
-                "app_version": "0.3.0",
+                "app_version": "0.3.2",
             },
         ).get_json()
         self.assertEqual(upgraded["ticket"]["plan"], "pro_subscription")
@@ -149,7 +182,7 @@ class LicenseApiTests(unittest.TestCase):
                 "install_id": self.install_id,
                 "device_hash": self.device_hash,
                 "platform": "windows-amd64",
-                "app_version": "0.3.0",
+                "app_version": "0.3.2",
             },
         )
         self.assertEqual(read_only.status_code, 200)

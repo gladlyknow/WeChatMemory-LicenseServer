@@ -211,11 +211,11 @@ sudo openssl x509 -in /etc/letsencrypt/live/104.224.90.172/cert.pem \
 在服务器上使用仅有该仓库读权限的部署凭据。闭源仓库不要使用个人全权 GitHub token：
 
 ```bash
-sudo install -d -o root -g root -m 0700 /root/releases
+sudo install -d -o root -g root -m 0755 /data
 sudo git clone --depth 1 \
   https://github.com/gladlyknow/WeChatMemory-LicenseServer.git \
-  /root/releases/WeChatMemory-LicenseServer
-cd /root/releases/WeChatMemory-LicenseServer
+  /data/WeChatMemory-LicenseServer
+cd /data/WeChatMemory-LicenseServer
 git rev-parse --short HEAD
 ```
 
@@ -223,7 +223,7 @@ git rev-parse --short HEAD
 
 ### 9.2 首次部署生产签名私钥
 
-客户端 `0.3.0` 内置的候选生产公钥必须与服务器私钥一致。将开发端忽略目录中的
+客户端 `0.3.2` 生成信任根中的生产公钥必须与服务器私钥一致。将开发端忽略目录中的
 `.secrets/signing-ed25519.pem` 通过受控通道上传为 `/root/wkm-signing-ed25519.pem`，不能经过 Git、聊天工具或工单传输。
 
 在服务器核对权限：
@@ -244,13 +244,13 @@ sudo bash deploy/el9/install-release.sh \
 
 1. 创建 `wkm-license` 用户和受限目录；
 2. 复制不可变 release，建立 Python 3.11 虚拟环境并安装 Waitress/Flask/cryptography；
-3. 把私钥安装到 `/etc/wechat-memory-license/signing-ed25519.pem`；
-4. 创建 `service.env`，初始化 SQLite schema v2 和套餐；
+3. 校验跟踪的公钥清单，把私钥安装到 `/etc/wechat-memory-license/signing-ed25519-2026-10-30.pem`；
+4. 创建 `service.env`，写入公钥清单路径，初始化 SQLite schema v2 和套餐；
 5. 安装 systemd unit，原子切换 `current`，启动后检查 `/readyz`；
 6. 升级时使用 SQLite `.backup` 创建并校验完整备份。
 
 私钥安装成功后，从 `/root` 清理临时上传副本前，先确认
-`/etc/wechat-memory-license/signing-ed25519.pem` 可用且权限为 `0640 root:wkm-license`。
+`/etc/wechat-memory-license/signing-ed25519-2026-10-30.pem` 可用且权限为 `0640 root:wkm-license`。
 
 ### 9.3 验证进程和 SQLite
 

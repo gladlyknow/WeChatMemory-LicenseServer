@@ -1,6 +1,6 @@
 # WeChatMemory 授权服务原理、接口与运维设计
 
-> 基线：License Server `0.2.0` / Client `0.3.0`
+> 基线：License Server `0.2.1` / Client `0.3.2`
 > 公网入口：`https://104.224.90.172:9000`
 > 存储：单机 SQLite3，客户聊天数据不上云。
 
@@ -160,7 +160,8 @@ REFRESH_TOKEN_DAYS=365
 LICENSE_TICKET_HOURS=24
 RATE_LIMIT_PER_MINUTE=20
 SIGNING_KEY_ID=2026-10-30
-SIGNING_PRIVATE_KEY_PATH=/etc/wechat-memory-license/signing-ed25519.pem
+SIGNING_PRIVATE_KEY_PATH=/etc/wechat-memory-license/signing-ed25519-2026-10-30.pem
+SIGNING_PUBLIC_KEYS_PATH=/opt/wechat-memory-license/current/config/signing-public-keys.json
 ```
 
 `LICENSE_TICKET_HOURS` 是在线票据时长，不是用户套餐有效期。服务端会把订阅票据截断在权益到期时间内。
@@ -197,5 +198,5 @@ SIGNING_PRIVATE_KEY_PATH=/etc/wechat-memory-license/signing-ed25519.pem
 ## 11. 当前交付状态
 
 - 已完成：SQLite schema v2、套餐快照、注册脚本、激活、设备上限、refresh token 轮换、吊销、Ed25519 票据、限流、systemd/Nginx 部署素材和自动化测试。
-- 已完成：客户端 `0.3.0` 激活页、未激活锁定、内置公钥验签、后台刷新、到期只读和 capability gate。
-- 待完成：将服务真实部署到 `104.224.90.172`。当前从开发环境访问 `22/tcp` 时远端主动断开，需要可用的 SSH 用户、端口和私钥，或先将管理来源 IP 加入允许列表。
+- 已完成：客户端 `0.3.2` 激活页、未激活锁定、内置公钥验签、公钥清单生成、后台刷新、到期只读和 capability gate。
+- 待完成：已具备 SSH 管理入口，需在 `104.224.90.172` 上执行 `/data/WeChatMemory-LicenseServer/deploy/el9/deploy-from-data.sh`，并完成激活、刷新、吊销、离线和备份恢复验收。
