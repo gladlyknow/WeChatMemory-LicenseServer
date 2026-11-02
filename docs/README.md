@@ -28,6 +28,7 @@
 | 需要逐步理解可选 TLS | [EL9 IP 证书手册](MANUAL_DEPLOY_EL9_IP_CERT.md) | 仅显式 letsencrypt 模式 |
 | 生成或轮换签名密钥 | [签名密钥运维](SIGNING_KEY_OPERATIONS.md) | 公钥清单、备份、恢复、客户端先行轮换 |
 | 发布审计与签字 | [授权服务验收标准](ACCEPTANCE_CRITERIA.md) | P0/P1/P2、授权不变量、回滚、法务与未通过循环 |
+| 查看当前生产证据 | [0.2.7 部署验收记录](DEPLOYMENT_ACCEPTANCE_2026-11-02.md) | 物理 release、健康检查、公钥、端口与仍开放项 |
 | 商业法务与依赖来源 | [法务与 SBOM 发布门禁](LEGAL_AND_SBOM_RELEASE_GATE.md) | proprietary 基线、第三方 notice、精确依赖 SPDX 和人工法律签字 |
 | 审查固定 IP 部署决策 | [104.244.90.172 部署设计](DEPLOYMENT_104.244.90.172.md) | 网络、HTTP 风险、可选 TLS、客户端权限语义 |
 | 修改文档或发布契约 | [文档随代码发布规则](DOCUMENTATION_POLICY.md) | 必修场景、校验命令和评审清单 |
