@@ -42,7 +42,7 @@ flowchart LR
 Authorization、Cookie、请求体或完整设备摘要。云安全组应尽量限制 9000 的访问来源。
 
 未来需要链路保密时，必须先发布内置匹配 HTTPS origin/信任策略的新客户端，再显式选择
-`--tls-mode letsencrypt|existing --ack-client-https-origin-ready`。当前 Client `0.3.7` 只允许固定 HTTP，
+`--tls-mode letsencrypt|existing --ack-client-https-origin-ready`。当前 Client `0.3.8` 只允许固定 HTTP，
 不兼容 TLS 入口。默认 HTTP 部署不开放 80、不创建 ACME webroot、不安装或运行 Certbot，也不依赖证书成功与否。
 
 ## 3. 网络与进程
