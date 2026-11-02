@@ -163,3 +163,58 @@ wkm_deploy_checkpoint() {
     return 97
   fi
 }
+
+wkm_stop_systemd_units_and_verify_inactive() {
+  local unit=""
+  local load_state=""
+  local active_state=""
+
+  if (( $# == 0 )); then
+    echo "未提供需要停止的 systemd 单元。" >&2
+    return 2
+  fi
+  for unit in "$@"; do
+    if [[ ! "${unit}" =~ ^[A-Za-z0-9_.@:-]+$ ]]; then
+      echo "systemd 单元名不合法。" >&2
+      return 2
+    fi
+    if ! load_state="$(systemctl show "${unit}" \
+      --property=LoadState --value 2>/dev/null)"; then
+      echo "无法确认 systemd 单元加载状态：${unit}" >&2
+      return 1
+    fi
+    if [[ -z "${load_state}" ]]; then
+      echo "systemd 单元加载状态为空：${unit}" >&2
+      return 1
+    fi
+    if ! active_state="$(systemctl show "${unit}" \
+      --property=ActiveState --value 2>/dev/null)"; then
+      echo "无法确认 systemd 单元运行状态：${unit}" >&2
+      return 1
+    fi
+    if [[ "${load_state}" == "not-found" ]]; then
+      case "${active_state}" in
+        inactive|failed) continue ;;
+        *)
+          echo "未找到单元文件但单元仍可能运行：${unit}=${active_state:-unknown}" >&2
+          ;;
+      esac
+    fi
+    if ! systemctl stop "${unit}"; then
+      echo "无法停止 systemd 单元，拒绝修改运行态：${unit}" >&2
+      return 1
+    fi
+    if ! active_state="$(systemctl show "${unit}" \
+      --property=ActiveState --value 2>/dev/null)"; then
+      echo "无法确认 systemd 单元停止后状态：${unit}" >&2
+      return 1
+    fi
+    case "${active_state}" in
+      inactive|failed) ;;
+      *)
+        echo "systemd 单元仍可能在运行，拒绝修改运行态：${unit}=${active_state:-unknown}" >&2
+        return 1
+        ;;
+    esac
+  done
+}

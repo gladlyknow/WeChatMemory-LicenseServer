@@ -38,8 +38,10 @@ wheelhouse、哈希清单和独立漏洞扫描；在那之前不得把“精确�
 
 ```bash
 cd /data/WeChatMemory-LicenseServer
+WKM_RELEASE="$(readlink -e /opt/wechat-memory-license/current)"
+test -n "${WKM_RELEASE}"
 SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)" \
-  /opt/wechat-memory-license/current/.venv/bin/python \
+  "${WKM_RELEASE}/.venv/bin/python" \
   scripts/generate_sbom.py --output sbom/server-runtime.spdx.json
 ```
 
@@ -50,7 +52,7 @@ SPDX JSON；若未设置，生成器使用 SPDX 可重复构建哨兵时间 `197
 候选环境与已评审 SBOM 的发布校验：
 
 ```bash
-/opt/wechat-memory-license/current/.venv/bin/python \
+"${WKM_RELEASE}/.venv/bin/python" \
   scripts/generate_sbom.py --check sbom/server-runtime.spdx.json
 ```
 

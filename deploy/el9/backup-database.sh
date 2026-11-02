@@ -8,10 +8,26 @@ RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-30}"
 SESSION_RETENTION_DAYS="${REFRESH_SESSION_RETENTION_DAYS:-90}"
 SESSION_BATCH_SIZE="${REFRESH_SESSION_PRUNE_BATCH_SIZE:-500}"
 SESSION_MAX_BATCHES="${REFRESH_SESSION_PRUNE_MAX_BATCHES:-20}"
+DEPLOY_LOCK_PATH=/run/wechat-memory-license-deploy.lock
 
 if [[ ${EUID} -ne 0 ]]; then
   echo "请以 root 执行数据库备份。" >&2
   exit 2
+fi
+if ! command -v flock >/dev/null 2>&1; then
+  echo "缺少 flock，无法确认数据库当前可安全备份。" >&2
+  exit 3
+fi
+if [[ -L "${DEPLOY_LOCK_PATH}" ]] || \
+   { [[ -e "${DEPLOY_LOCK_PATH}" ]] && [[ ! -f "${DEPLOY_LOCK_PATH}" ]]; }; then
+  echo "部署锁路径不是受控普通文件。" >&2
+  exit 3
+fi
+exec {BACKUP_LOCK_FD}<>"${DEPLOY_LOCK_PATH}"
+chmod 0600 "${DEPLOY_LOCK_PATH}"
+if ! flock -s -n "${BACKUP_LOCK_FD}"; then
+  echo "授权服务正在部署或迁移，本次备份未启动。" >&2
+  exit 5
 fi
 if [[ ! -f "${DATABASE_PATH}" ]]; then
   echo "找不到授权数据库。" >&2

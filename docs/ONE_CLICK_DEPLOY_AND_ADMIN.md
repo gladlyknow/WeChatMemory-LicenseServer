@@ -24,7 +24,7 @@ flowchart LR
 联系人、搜索词和微信数据库密钥不得上传。
 
 > **客户端兼容门禁：** Client `0.3.5` 只允许当前固定 HTTP origin；Client `0.3.4` 及更旧版固定
-> HTTPS，不能在 Server `0.2.6` 的 HTTP 入口刷新。已有用户必须协调发布 0.3.5/0.2.6，切换期依靠
+> HTTPS，不能在 Server `0.2.7` 的 HTTP 入口刷新。已有用户必须协调发布 0.3.5/0.2.7，切换期依靠
 > 尚在 `offline_until` 内的已签名票据过渡。尚无生产用户时不构成阻断。
 
 ## 2. 部署前必须准备
@@ -123,9 +123,8 @@ sudo bash deploy/el9/deploy-from-data.sh \
 `public` 只是示例；必须使用公网网卡实际所属 zone。只有一个活动 zone 时可省略该参数；
 检测到多个 zone 时脚本会失败关闭，不会把入站规则批量加到多个网络。
 
-当前服务器的 `entityecho.conf` 已由管理员手工删除，因此上面的现行部署命令 **不带**
-`--retire-nginx-conf`；当文件已不存在时绝对不要传该参数，否则预检会按设计失败关闭。
-只有冲突文件仍存在，且已确认 **整个** `entityecho.conf`
+先只读执行 `test -e /etc/nginx/conf.d/entityecho.conf`。当文件不存在时，上面的部署命令 **不带**
+`--retire-nginx-conf`，否则预检会按设计失败关闭。只有冲突文件仍存在，且已确认 **整个** `entityecho.conf`
 不再承载任何业务时，才可把下面这一次性显式授权追加到首次命令：
 
 ```bash
@@ -180,8 +179,8 @@ sudo bash deploy/el9/one-click-deploy.sh \
 5. 默认停用本项目历史遗留的专属 Certbot timer，并保留证书和 venv 供未来显式 TLS 迁移；不触碰其他业务或系统级 Certbot timer；
 6. 创建不可变候选 release 源码目录；无论来自 Git 还是上传包，目录统一为 `0755`、普通文件统一为 `0644`，仅审计白名单中与 Git `100755` 完全一致的入口恢复 `0755`；目标缺失、出现符号链接或清单漂移均失败关闭；
 7. 对旧库创建并校验 SQLite 一致备份；
-8. 在候选 release 内扫描私钥标记，建立独立 `.venv`，验证依赖闭包与精确 SBOM，强制执行严格编译、服务端全测、全部 EL9 Shell 语法和部署事务自测；生产 venv 和一次性测试 venv 都保持 `root` owner，仅把 group 设为 `wkm-license` 并授予 `g+rX,o-rwx`，运行账号无写权；pytest 固定以无登录权限的 `wkm-license` 账号运行，测试替身即使失效也无权改写主机；校验签名私钥后再执行 SQLite init/migration；
-9. 安装 systemd 单元和每日备份定时器，原子切换 `current`，启动授权服务并通过本机 `/readyz/deep`；
+8. 在候选 release 内扫描私钥标记，建立独立 `.venv`，验证依赖闭包与精确 SBOM，并从已安装 distribution 的原始 `RECORD` 校验 Waitress 文件存在性、大小、SHA-256 和真实启动导入链；强制执行严格编译、服务端全测、全部 EL9 Shell 语法和部署事务自测；生产 venv 和一次性测试 venv 都保持 `root` owner，仅把 group 设为 `wkm-license` 并授予 `g+rX,o-rwx`，运行账号无写权；pytest 固定以无登录权限的 `wkm-license` 账号运行，测试替身即使失效也无权改写主机；校验签名私钥后再执行 SQLite init/migration；
+9. 将 systemd 的解释器、工作目录、预检和公钥清单渲染为同一个物理 release，安装每日备份定时器，原子切换 `current`，启动授权服务并通过本机 `/readyz/deep`；
 10. 切换 Nginx HTTP 生产配置，验证公网 `/readyz` 和签名公钥接口。
 
 在同机多业务环境，脚本默认只拥有
@@ -200,7 +199,8 @@ sudo bash deploy/el9/one-click-deploy.sh \
 部署过程中不要同时修改其他 Nginx 站点；需要修改时先结束本次部署。
 
 脚本不会删除已经存在的数据库。升级前会先通过 SQLite `.backup` 创建一致性备份。候选版本的
-本机验收、Nginx 切换或公网验收失败时，脚本会恢复部署前的 `current`、`service.env`、
+本机验收、Nginx 切换或公网验收失败时，脚本会先停止备份 timer、正在执行的备份 oneshot 与 API，
+再恢复部署前的 `current`、`service.env`、
 systemd 单元/服务状态和 Nginx 配置/服务状态；从旧 TLS 迁移到 HTTP 时，项目专属 Certbot timer
 的文件、启停状态也在事务内；`--tls-mode existing` 还会按字节恢复覆盖前的
 固定路径证书与私钥。但候选版本已经执行过的 SQLite migration 不会
@@ -469,7 +469,7 @@ sudo wkm-license-admin reset-code --username alice --keep-sessions
 审计日志只记录“发生了重置”和是否撤销会话，不记录新旧激活码明文。
 
 从 Server `0.2.5` 或更旧版升级时，旧版可能已填写 `last_used_at` 却仍把凭据留为 `active`。
-`0.2.6` 对这类历史已用码统一返回 401，不会在升级后再允许重放一次。需要新设备激活时，管理员必须
+`0.2.6` 及以后版本对这类历史已用码统一返回 401，不会在升级后再允许重放一次。需要新设备激活时，管理员必须
 使用 `reset-code --keep-sessions` 生成新码；不得人工清空 `last_used_at` 或修改旧摘要。
 
 ## 10. 设备解绑和封禁
@@ -617,8 +617,8 @@ sudo -u wkm-license sqlite3 /var/lib/wechat-memory-license/license.sqlite3 \
 | 路径 | 用途 |
 |---|---|
 | `/opt/wechat-memory-license/releases/` | 不可变发布版本；每个 release 自带独立 `.venv` |
-| `/opt/wechat-memory-license/current` | 当前版本符号链接 |
-| `/opt/wechat-memory-license/current/.venv` | 当前 release 的 Python 环境；不与其他 release 共享 |
+| `/opt/wechat-memory-license/current` | 当前版本发现指针；运行中 systemd 服务不通过它导入模块 |
+| `/opt/wechat-memory-license/releases/RELEASE_ID/.venv` | 对应 release 的 Python 环境；systemd 固定使用物理路径 |
 | `/etc/wechat-memory-license/service.env` | 服务配置 |
 | `/etc/wechat-memory-license/signing-ed25519-<key-id>.pem` | 按 key-id 版本化的 Ed25519 私钥 |
 | `/var/lib/wechat-memory-license/license.sqlite3` | 授权数据库 |

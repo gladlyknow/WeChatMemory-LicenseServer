@@ -1,6 +1,6 @@
 # WeChatMemory 授权服务审计与验收标准
 
-> 基线：服务端 `0.2.6`、SQLite schema 3、授权协议 v1；审计日期 2026-10-30。
+> 基线：服务端 `0.2.7`、SQLite schema 3、授权协议 v1；审计日期 2026-11-02。
 > 客户端数据不变量、真机矩阵和导出门禁见 `WeChatMemory-Client/docs/ACCEPTANCE_CRITERIA.md`。
 
 ## 1. 当前结论
@@ -123,9 +123,9 @@ SQLite 一致备份、顺序 migration 和 EL9 部署素材。本次审计未证
 | S-P1-02 | 客户端中 `multi_account` 没有执行点，单账号套餐可累积多账号档案 | 先决定限制新同步/显示/导出的产品语义，再在客户端加 fail-closed 用例 |
 | S-P1-03 | **源码关闭**：公网 `/readyz` 仅检查 schema 并进入应用限流；`/readyz/deep` 才执行 `quick_check`，仅允许 loopback，Nginx 对公网精确返回 404 | API/Nginx 合同回归通过；目标环境探针证据并入 S-P1-07 |
 | S-P1-04 | **源码关闭**：除廉价 `/healthz` 与仅本机 `/readyz/deep` 外，`/readyz`、`/v1/time`、`/v1/keys` 和授权路由均进入限流器；限流器同时维护每源和进程全局窗口、最多 4,096 个活跃 key，周期清理过期 key，键表满时拒绝陌生 key | 元数据 API 429/探针豁免、5,000 唯一来源、2,000 并发调用和时间推进回收测试通过 |
-| S-P1-05 | **源码候选已修复，待现场证据**：每个 release 使用自己的 `.venv`，systemd/CLI 通过 `current/.venv` 运行；候选依赖失败不修改旧 release | 在隔离 EL9 验收机注入 `after_application_switch` 故障，归档旧 release 指针、依赖和服务恢复证据 |
+| S-P1-05 | **源码候选已修复，待现场证据**：每个 release 使用自己的 `.venv`；systemd 的解释器、工作目录、预检脚本和公钥清单全部渲染为同一物理 release，运行期不再解引用 `current`；管理员入口只解析一次 `current`；正常切换和回滚在恢复指针、环境或单元前都先停稳备份 timer、备份 oneshot 与 API，停止失败则保留事务且禁止改路径；同一内核 `flock` 覆盖源码 fast-forward、部署、管理写入和备份 | 在隔离 EL9 验收机复现旧版启动期回滚，再注入 `after_application_switch` 故障；证明进程所有模块均来自同一 release，归档旧 release 指针、依赖和服务恢复证据 |
 | S-P1-06 | **源码候选已修复，待现场证据**：一键部署的外层补偿事务覆盖 `current`、`service.env`、systemd/Timer、Nginx 配置和服务状态；从旧 TLS 切换 HTTP 时项目专属 Certbot timer 也事务化停用；existing TLS 证书/私钥在覆盖前捕获并按字节恢复 | 本地事务自测对证书/私钥执行 overwrite→fault→rollback→`cmp`；再在隔离 EL9 验收机分别注入 `after_application_install` 和 `after_nginx_switch`，验证恢复同一部署前快照 |
-| S-P1-07 | **部分修复，仍开放**：候选发布已强制私钥标记扫描、依赖闭包/精确 SBOM、严格编译、服务端全测、全部 EL9 Shell 语法和事务自测，且位于 env/DB/current 变更之前；候选树权限固定为目录 `0755`/普通文件 `0644`，仅 Git `100755` 精确白名单恢复执行位，pytest 由 `wkm-license` 非 root 运行；仍缺真实公网授权金丝雀和归档证据 | 使用专用金丝雀凭据在目标环境完成 activate → 同激活码 401 → refresh → 旧 token 重放拒绝 → deactivate，保存 commit/schema/key-id/时间戳和脱敏结果 |
+| S-P1-07 | **部分修复，仍开放**：候选发布已强制私钥标记扫描、依赖闭包/精确 SBOM、严格编译、服务端全测、全部 EL9 Shell 语法和事务自测，且位于 env/DB/current 变更之前；候选树权限固定为目录 `0755`/普通文件 `0644`，仅 Git `100755` 精确白名单恢复执行位，pytest 由 `wkm-license` 非 root 运行；启动预检会从已安装 distribution 的原始 `RECORD` 逐文件验证 Waitress 的 SHA-256/大小/边界并真实导入启动链；仍缺真实公网授权金丝雀和归档证据 | 使用专用金丝雀凭据在目标环境完成启动依赖预检、activate → 同激活码 401 → refresh → 旧 token 重放拒绝 → deactivate，保存 commit/schema/key-id/时间戳和脱敏结果 |
 | S-P1-08 | **源码关闭**：v1/v2/v3 使用连续顺序 SQL migration；全部 pending migration 在单一 `BEGIN IMMEDIATE` 中执行；原生 ledger 记录 SQL SHA，pre-ledger 旧库经版本化最低结构合同验证后记录 adoption 合同 SHA | fresh、真实历史 v1→v3 与 v2→v3 保数、incomplete schema 拒绝、失败全批回滚、已应用 SQL/ledger 漂移拒绝回归通过 |
 | S-P1-09 | 仅有本机 SQLite 备份；异地加密副本和恢复演练只在文档中 | 实际配置异地备份，产出新鲜度告警和月度恢复 RPO/RTO 证据 |
 | S-P1-10 | **工程材料关闭、人工审批仍开放**：仓库已有 proprietary `LICENSE`、11 个运行依赖通知、确定性 SPDX、精确约束和强制发布门禁 | 权利人、法律/隐私负责人完成适用地区、SaaS、EULA、隐私和第三方义务签字；补漏洞扫描审批记录 |

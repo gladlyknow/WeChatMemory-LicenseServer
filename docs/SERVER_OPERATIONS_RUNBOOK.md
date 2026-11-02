@@ -35,8 +35,8 @@ flowchart LR
 |---|---|---|
 | `/data/WeChatMemory-LicenseServer` | 干净的 `main` 源码工作树 | 不放私钥、数据库、日志 |
 | `/opt/wechat-memory-license/releases` | 不可变发布版 | 每个 release 自带独立 `.venv` |
-| `/opt/wechat-memory-license/current` | 当前发布软链接 | 原子切换 |
-| `/opt/wechat-memory-license/current/.venv` | 当前 release 的 Python 3.11 环境 | 不修改其他 release 的依赖 |
+| `/opt/wechat-memory-license/current` | 当前发布软链接 | 仅用于版本发现；运行中服务不通过它导入模块 |
+| `/opt/wechat-memory-license/releases/RELEASE_ID/.venv` | 对应 release 的 Python 3.11 环境 | systemd 固定到物理 release，不修改其他 release 的依赖 |
 | `/etc/wechat-memory-license/service.env` | 应用配置 | `root:wkm-license 0640` |
 | `/etc/wechat-memory-license/signing-ed25519-<key-id>.pem` | 签名私钥 | 不进 Git/SQLite/普通备份 |
 | `/var/lib/wechat-memory-license/license.sqlite3` | 授权数据库 | 本机磁盘 |
@@ -125,16 +125,21 @@ sudo bash deploy/el9/deploy-from-data.sh
 一键入口在任何 Nginx 配置修改前先校验源码文档契约。发布器随后从已提交的
 `HEAD` 创建新 release，再次校验 release 内文档，然后通过 SQLite `.backup` 生成并校验
 一致备份。备份成功后，发布器先拒绝含标准私钥标记的候选包，再以 `requirements.lock` 约束精确版本，
-只在候选 release 的 `.venv` 中安装依赖，验证依赖闭包与精确 SBOM、
+只在候选 release 的 `.venv` 中安装依赖，验证依赖闭包与精确 SBOM、Waitress 已安装
+distribution 原始 `RECORD` 中的文件大小/SHA-256 和真实启动导入链、
 严格编译、服务端全测、全部 EL9 Shell 语法和部署事务自测，再校验签名私钥。候选树先被强制归一为目录 `0755`/普通文件 `0644`，只有审计白名单且与 Git `100755` 模式完全一致的入口可执行；上传包也使用同一白名单。两个 venv 都由 `root` 持有且不允许组写，只向 `wkm-license` 组开放读取/遍历/执行；pytest 由 `wkm-license` 非 root 运行，不继承 root 的主机修改能力。所有门禁通过后才写入候选配置、
 执行 migration；migration ledger 会校验原生 SQL 的名称/SHA-256；pre-ledger 旧库只有在通过版本化
-最低结构合同后，才记录显式 adoption 名称和合同 SHA-256。随后原子切换
-`current`、重启服务并检查仅本机可访问的 `/readyz/deep`。当前版本的依赖不会被候选版本污染。
+最低结构合同后，才记录显式 adoption 名称和合同 SHA-256。随后把 systemd 解释器、工作目录、预检
+脚本和公钥清单渲染为同一物理 release，再原子切换 `current`、重启服务并检查仅本机可访问的
+`/readyz/deep`。`current` 只供版本发现，运行中进程不会因指针切换而混用依赖。
 
 已有通过校验的 Nginx 生产配置时，升级过程不会先切换到 bootstrap。从写入候选 `service.env`
 到公网 `/readyz` 和 `/v1/keys` 验收完成前，统一补偿事务覆盖 `current`、`service.env`、systemd 单元/服务状态、
 Nginx 配置/服务状态以及相关 timer；默认 HTTP 会事务化停用本项目专属 Certbot timer，失败时恢复；
-existing TLS 模式还捕获覆盖前的证书和私钥。任一检查失败都恢复部署前快照。
+existing TLS 模式还捕获覆盖前的证书和私钥。任一检查失败时，脚本先停止备份 timer、正在执行的
+备份 oneshot 和 API 进程，
+再恢复 `current`、环境与 unit，避免启动中的 Python 继续经可变路径导入另一个 release；随后恢复
+部署前快照。主机级排他锁阻止两个部署并发切换。
 首次从已停用 `entityecho.conf` 接管公网 IP 时，仅可显式传入
 `--retire-nginx-conf /etc/nginx/conf.d/entityecho.conf`。退役前会保存事务副本；成功后副本与记录位于
 `/etc/wechat-memory-license/retired-nginx/retirement.*/`；失败时按字节恢复。原路径若在部署期间被重建，
@@ -150,37 +155,19 @@ existing TLS 模式还捕获覆盖前的证书和私钥。任一检查失败都�
   existing 模式固定路径上的证书/私钥属于旧流量运行态，失败时会从事务快照恢复；
 - 密钥轮换不属于普通升级，必须使用专题流程。
 
-### 4.2 已成功上线后的人工代码回滚
+### 4.2 已成功上线后的代码回滚
 
-先记录当前指向并查找上一版：
+禁止只手工切换 `current`。从 `0.2.7` 起，systemd unit 和 `service.env` 的公钥清单均固定到物理
+release；只改软链接既不会切换正在运行的服务，还会让管理员看到与 systemd 不同的版本。
 
-```bash
-readlink -f /opt/wechat-memory-license/current
-sudo ls -1dt /opt/wechat-memory-license/releases/* | head -n 5
-```
+正常回滚应在开发/发布机对目标变更创建经过审查的 revert commit，推送到 `main`，再完整执行 4.1
+的部署流程。这样候选仍会经过依赖、Waitress `RECORD`、全测、数据库兼容和健康检查，并生成新的
+不可变 release。回滚前记录当前 commit、物理 release、unit、`service.env` 和一致备份。
 
-仅在确认目标 release 与当前数据库 schema、`service.env` 和签名密钥兼容后，才原子切换：
-
-```bash
-read -r -p '请输入已确认的上一版 release 完整路径：' WKM_PREVIOUS_RELEASE
-WKM_PREVIOUS_RELEASE="$(readlink -f -- "${WKM_PREVIOUS_RELEASE}")"
-case "${WKM_PREVIOUS_RELEASE}" in
-  /opt/wechat-memory-license/releases/*) ;;
-  *) echo 'release 路径不在受控目录' >&2; exit 2 ;;
-esac
-if [[ ! -x "${WKM_PREVIOUS_RELEASE}/.venv/bin/python" ]]; then
-  echo 'release 不存在或缺少独立 .venv' >&2; exit 2
-fi
-sudo ln -sfn "${WKM_PREVIOUS_RELEASE}" \
-  /opt/wechat-memory-license/current.rollback
-sudo mv -Tf /opt/wechat-memory-license/current.rollback \
-  /opt/wechat-memory-license/current
-sudo systemctl restart wechat-memory-license
-curl --fail --silent --show-error http://127.0.0.1:9100/readyz/deep
-```
-
-若上一次发布包含密钥切换或不可逆数据库变更，不得只回滚软链接；必须同时恢复
-匹配的 `service.env`、私钥选择和 SQLite 备份。
+若故障发生在一次尚未提交成功的部署中，不要人工改指针；部署器会先停 API/timer，再按事务快照
+恢复 `current`、`service.env` 和 unit。若主机掉电留下事务目录，保持现场并按日志核对，不得删除目录
+后强行重跑。若变更包含不可逆 migration、密钥切换或数据写入，代码 revert 也不能替代经过批准的
+数据库/密钥恢复方案。
 
 ## 5. 用户和授权管理
 
@@ -293,11 +280,28 @@ fi
 sudo -u wkm-license sqlite3 "${WKM_RESTORE_BACKUP}" 'PRAGMA integrity_check;'
 ```
 
-停服务，把当前数据库及 WAL/SHM 移到事故保留目录，而不是删除：
+先停止 timer，等待可能正在执行的备份/清理 oneshot 完全停止，再停止 API。只有三个单元都已确认
+不在运行，才可以移动数据库及 WAL/SHM；否则保持现场并退出：
 
 ```bash
 : "${WKM_RESTORE_BACKUP:?请先执行上一段备份路径验证}"
+WKM_BACKUP_TIMER_WAS_ACTIVE=0
+if sudo systemctl is-active --quiet wechat-memory-license-backup.timer; then
+  WKM_BACKUP_TIMER_WAS_ACTIVE=1
+fi
+sudo systemctl stop wechat-memory-license-backup.timer
+sudo systemctl stop wechat-memory-license-backup.service
 sudo systemctl stop wechat-memory-license
+for WKM_UNIT in \
+  wechat-memory-license-backup.timer \
+  wechat-memory-license-backup.service \
+  wechat-memory-license.service; do
+  WKM_STATE="$(sudo systemctl show "${WKM_UNIT}" -p ActiveState --value)"
+  case "${WKM_STATE}" in
+    inactive|failed) ;;
+    *) echo "单元未完全停止：${WKM_UNIT}=${WKM_STATE}" >&2; exit 3 ;;
+  esac
+done
 WKM_INCIDENT_DIR="/var/lib/wechat-memory-license/restore-before-$(date -u +%Y%m%dT%H%M%SZ)"
 sudo install -d -o wkm-license -g wkm-license -m 0700 "${WKM_INCIDENT_DIR}"
 for WKM_NAME in license.sqlite3 license.sqlite3-wal license.sqlite3-shm; do
@@ -317,11 +321,14 @@ sudo -u wkm-license sqlite3 \
   'PRAGMA integrity_check; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;'
 sudo systemctl start wechat-memory-license
 curl --fail --silent --show-error http://127.0.0.1:9100/readyz/deep
+if (( WKM_BACKUP_TIMER_WAS_ACTIVE )); then
+  sudo systemctl start wechat-memory-license-backup.timer
+fi
 ```
 
 再验证一个专用验收账号的激活或刷新流程。在验收完成前不得删除 `${WKM_INCIDENT_DIR}`。
 
-若恢复后验收失败，立即停止服务，先把失败恢复产物移入新的保留目录，再将
+若恢复后验收失败，保持备份 timer 停止，立即停止服务，先把失败恢复产物移入新的保留目录，再将
 `${WKM_INCIDENT_DIR}` 内的原始数据库、WAL 和 SHM 原样移回。不要把新旧 WAL 交叉组合。
 
 ## 7. 签名密钥轮换
@@ -381,12 +388,14 @@ sudo tail -n 100 /var/log/nginx/wechat-memory-license.error.log
 
 ```bash
 python3.11 scripts/check_documentation.py
-/opt/wechat-memory-license/current/.venv/bin/python -m unittest discover -s tests -v
+WKM_RELEASE="$(readlink -e /opt/wechat-memory-license/current)"
+test -n "${WKM_RELEASE}"
+"${WKM_RELEASE}/.venv/bin/python" -m unittest discover -s tests -v
 bash -n deploy/el9/*.sh deploy/el9/wkm-license-admin
 git diff --check
 ```
 
-生产机首次安装尚不存在 `/opt/wechat-memory-license/current/.venv` 时，服务端单元测试应已在开发/发布机
+生产机首次安装尚不存在 `current` 指针时，服务端单元测试应已在开发/发布机
 的 `.venv` 中通过；目标机仍必须用 `python3.11 scripts/check_documentation.py` 执行无依赖文档门禁。
 
 文档变更规则见 [文档随代码发布规则](DOCUMENTATION_POLICY.md)。

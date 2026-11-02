@@ -31,7 +31,7 @@ CSPRNG 生成，再序列化为未加密 PKCS#8 PEM。它的公钥是唯一派�
 环境必须明确区分：
 
 - 受控 Ubuntu 开发/密钥管理机负责生成私钥、修改公开清单和同步客户端，使用项目 `.venv`；
-- 生产 EL9 服务器只验证、安装和使用已审核私钥，使用当前 release 的 `/opt/wechat-memory-license/current/.venv`；
+- 生产 EL9 服务器只验证、安装和使用已审核私钥；人工命令必须先把 `current` 解析一次并固定到物理 release；
 - 生产服务器不修改 Git 公开清单，不临时生成新私钥。
 
 在保存当前匹配私钥的 Ubuntu 开发/密钥管理机上执行：
@@ -47,10 +47,12 @@ CSPRNG 生成，再序列化为未加密 PKCS#8 PEM。它的公钥是唯一派�
 
 ```bash
 cd /data/WeChatMemory-LicenseServer
-sudo /opt/wechat-memory-license/current/.venv/bin/python -m license_server signing-key verify \
+WKM_RELEASE="$(readlink -e /opt/wechat-memory-license/current)"
+test -n "${WKM_RELEASE}"
+sudo "${WKM_RELEASE}/.venv/bin/python" -m license_server signing-key verify \
   --path /etc/wechat-memory-license/signing-ed25519-2026-10-30.pem \
   --key-id 2026-10-30 \
-  --manifest /opt/wechat-memory-license/current/config/signing-public-keys.json
+  --manifest "${WKM_RELEASE}/config/signing-public-keys.json"
 ```
 
 该命令只输出公开元数据。任意一项不匹配都会以非零退出，部署器也会在安装前执行同等校验。
@@ -174,10 +176,12 @@ sudo chmod 0400 /media/offline/wkm-signing-2026-10-30.encrypted.pem
 ```bash
 sudo chown root:root /root/wkm-signing-ed25519.pem
 sudo chmod 0600 /root/wkm-signing-ed25519.pem
-sudo /opt/wechat-memory-license/current/.venv/bin/python -m license_server signing-key verify \
+WKM_RELEASE="$(readlink -e /opt/wechat-memory-license/current)"
+test -n "${WKM_RELEASE}"
+sudo "${WKM_RELEASE}/.venv/bin/python" -m license_server signing-key verify \
   --path /root/wkm-signing-ed25519.pem \
   --key-id 2026-10-30 \
-  --manifest /opt/wechat-memory-license/current/config/signing-public-keys.json
+  --manifest "${WKM_RELEASE}/config/signing-public-keys.json"
 ```
 
 ## 5. 故障处理

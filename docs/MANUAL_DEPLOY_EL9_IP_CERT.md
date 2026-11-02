@@ -109,9 +109,9 @@ sudo install -d -o wkm-license -g wkm-license -m 0750 /var/log/wechat-memory-lic
 sudo install -d -o nginx -g nginx -m 0755 /var/www/wechat-memory-license-acme
 ```
 
-以后每次手工发布使用不可变版本目录，例如
-`/opt/wechat-memory-license/releases/2026.10.17.1`。每个版本在自身 `.venv` 中安装依赖，验证后再原子切换
-`current` 符号链接。不要覆盖正在运行的版本目录，至少保留上一个带完整 `.venv` 的可回滚版本。
+以后每次发布都使用部署器生成的不可变版本目录。每个版本在自身 `.venv` 中安装依赖；systemd 的
+解释器、工作目录、预检和公钥清单必须固定到同一个物理 release。`current` 只用于版本发现，禁止
+把“只切换软链接”当作服务切换或回滚。不要覆盖正在运行的版本目录。
 
 ## 5. 配置防火墙与 SELinux
 
@@ -370,11 +370,17 @@ sudo chown root:root /root/wkm-signing-ed25519.pem
 sudo chmod 0600 /root/wkm-signing-ed25519.pem
 ```
 
-首次执行一键安装：
+首次执行统一部署入口。本文是未来 TLS 路径，因此还必须满足客户端 HTTPS 兼容门禁：
 
 ```bash
-sudo bash deploy/el9/install-release.sh \
-  "$PWD" /root/wkm-signing-ed25519.pem 2026-10-30
+sudo bash deploy/el9/deploy-from-data.sh \
+  --signing-key /root/wkm-signing-ed25519.pem \
+  --key-id 2026-10-30 \
+  --public-ip 104.244.90.172 \
+  --public-port 9000 \
+  --firewall-zone public \
+  --tls-mode letsencrypt \
+  --ack-client-https-origin-ready
 ```
 
 脚本会：
@@ -383,8 +389,10 @@ sudo bash deploy/el9/install-release.sh \
 2. 升级时使用 SQLite `.backup` 创建并校验完整备份；
 3. 拒绝含私钥标记的候选包，将候选树权限归一为目录 `0755`/普通文件 `0644`，仅恢复经审计且与 Git `100755` 精确一致的可执行白名单；在 release 内建立独立 Python 3.11 `.venv`，安装依赖、检查依赖闭包、对比精确 SPDX SBOM；venv 保持 `root:wkm-license`、`g+rX,o-rwx` 且组不可写，并以 `wkm-license` 非 root 账号通过服务端全测，同时完成严格编译、全部 EL9 Shell 语法与部署事务自测；
 4. 校验跟踪的公钥清单，把私钥安装到 `/etc/wechat-memory-license/signing-ed25519-2026-10-30.pem`；
-5. 快照当前应用运行态，写入候选 `service.env`，再初始化或迁移 SQLite schema 和套餐；
-6. 安装 systemd unit，原子切换 `current`，启动后检查仅本机可访问的 `/readyz/deep`。
+5. 取得全局排他锁，快照当前应用运行态，停止并确认 API/备份单元完全静止，再写入候选
+   `service.env`、初始化或迁移 SQLite schema 和套餐；
+6. 安装固定到物理 release 的 systemd unit，同步切换 `current`，启动后检查仅本机可访问的
+   `/readyz/deep`。
 
 私钥安装成功后，从 `/root` 清理临时上传副本前，先确认
 `/etc/wechat-memory-license/signing-ed25519-2026-10-30.pem` 可用且权限为 `0640 root:wkm-license`。
@@ -406,9 +414,7 @@ sudo -u wkm-license sqlite3 /var/lib/wechat-memory-license/license.sqlite3 \
 ### 9.4 创建首个客户端用户
 
 ```bash
-sudo -u wkm-license /opt/wechat-memory-license/current/.venv/bin/python \
-  /opt/wechat-memory-license/current/register_user.py add \
-  --db /var/lib/wechat-memory-license/license.sqlite3 \
+sudo wkm-license-admin add \
   --username example-user --plan permanent_personal
 ```
 
@@ -432,10 +438,12 @@ curl --fail --silent --show-error https://104.244.90.172:9000/v1/keys
 2. 上传到新的 release 目录，在其自身 `.venv` 安装和验证候选依赖，不修改当前 release；
 3. 用副本数据库运行迁移测试和完整性检查；
 4. 使用 SQLite `.backup` 备份当前数据库，单独保留匹配配置，并完成一次完整性验证；
-5. 执行受版本控制的 migration，原子切换 `current`，并重启服务；
+5. 停止并确认备份 timer、备份 oneshot 与 API 完全静止；执行受版本控制的 migration，把
+   `service.env`、systemd unit 和 `current` 同步切到同一物理 release，再启动服务；
 6. 检查本机 `127.0.0.1:9100/readyz/deep`，通过后才切换 Nginx；
 7. 检查公网 `https://104.244.90.172:9000/readyz` 和 `/v1/keys`；
-8. 失败时恢复上一版 `current`、`service.env`、systemd 单元/服务状态与 Nginx 配置/服务状态；
+8. 失败时先确认相关进程完全停止，再恢复上一版 `current`、`service.env`、systemd 单元/服务状态与
+   Nginx 配置/服务状态；停止失败时不得继续替换路径，必须保留事务证据；
 9. 不自动降级已执行的 SQLite migration。只有确认没有新写入并且已进入维护窗口时，才按恢复流程手工使用升级前备份。
 
 SQLite 备份必须使用 SQLite Online Backup API 或 `sqlite3 .backup`，不能在运行时直接复制单独的

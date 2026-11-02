@@ -1,8 +1,8 @@
 # 跨仓库交付总览与文档治理规范
 
-> 基线日期：2026-10-30
+> 基线日期：2026-11-02
 > 客户端：`WeChatMemory-Client 0.3.5`
-> 授权服务端：`WeChatMemory-LicenseServer 0.2.6`
+> 授权服务端：`WeChatMemory-LicenseServer 0.2.7`
 > 授权协议：`v1`；服务端 SQLite schema：`3`；公钥清单 schema：`1`
 
 本文是客户端与授权服务端协同发布的入口。它说明两个仓库的边界、部署顺序、版本与信任根检查，
@@ -198,7 +198,7 @@ VERSION=0.3.5 ./packaging/linux/build.sh
 |---|---|---|---|
 | 客户端 | `0.3.5` | Windows 10/11 x64；Ubuntu/Linux x86_64 | Windows 为 NativeCandidate，须实机验收 |
 | Windows 微信 | 4.x 读取框架 | 取钥门禁目前精确信任腾讯签名的 `Weixin.exe 4.1.0.34` 指定哈希 | 其他版本必须新增证据和门禁，不能默认放行 |
-| 授权服务端 | `0.2.6` | Enterprise Linux 9、Python 3.11、单主 SQLite | 手工部署 |
+| 授权服务端 | `0.2.7` | Enterprise Linux 9、Python 3.11、单主 SQLite | 手工部署 |
 | 公网接口 | `/v1/*` | HTTP `104.244.90.172:9000`；内部 `127.0.0.1:9100` | 明文风险已接受；未来 TLS 必须显式启用 |
 | 授权协议 | `v1` | `issuer=wechat-memory-license`、`audience=wechat-memory-client` | 未知 `key_id` 失败关闭 |
 | 服务端数据库 | schema `3` | 顺序 migration；终态 refresh session 有界清理；部署前后均需备份、廉价 `readyz` 和 loopback `readyz/deep` | SQLite WAL 单主 |
@@ -209,9 +209,9 @@ VERSION=0.3.5 ./packaging/linux/build.sh
 
 ### 4.1 origin 兼容断点与发布顺序
 
-- Client `0.3.4` 及更旧版固定 HTTPS，不能向 Server `0.2.6` 的默认 HTTP origin 刷新；
-- Client `0.3.5` 精确只允许 `http://104.244.90.172:9000`，不兼容 Server `0.2.6` 的可选 TLS 入口；
-- 已有生产用户时，必须协调发布 Client `0.3.5` 和 Server `0.2.6`。切换窗口内，旧客户端只能依靠仍在
+- Client `0.3.4` 及更旧版固定 HTTPS，不能向 Server `0.2.7` 的默认 HTTP origin 刷新；
+- Client `0.3.5` 精确只允许 `http://104.244.90.172:9000`，不兼容 Server `0.2.7` 的可选 TLS 入口；
+- 已有生产用户时，必须协调发布 Client `0.3.5` 和 Server `0.2.7`。切换窗口内，旧客户端只能依靠仍在
   `offline_until` 内的已验签票据过渡；超出该窗口前必须完成升级。尚无生产用户时不构成部署阻断；
 - 未来切换 TLS 前，必须先发布内置匹配 HTTPS origin/信任策略的客户端，然后服务端才能显式传入
   `--ack-client-https-origin-ready`。该参数是 fail-closed 部署门禁，不代表部署器能自动验证客户端覆盖率。

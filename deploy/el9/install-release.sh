@@ -38,6 +38,49 @@ if [[ ! -f "${SCRIPT_DIR}/release-permissions.sh" ]]; then
 fi
 # shellcheck source=release-permissions.sh
 . "${SCRIPT_DIR}/release-permissions.sh"
+
+# The one-click deployer passes its already-held descriptor explicitly.  A
+# direct invocation must acquire the same kernel lock itself.  Validating both
+# the descriptor target and inode token prevents a forged environment value
+# from bypassing serialization, while reusing the inherited open-file
+# description avoids self-deadlock in the child installer.
+DEPLOY_LOCK_PATH=/run/wechat-memory-license-deploy.lock
+if ! command -v flock >/dev/null 2>&1; then
+  echo "缺少 flock，无法对授权服务部署加排他锁。" >&2
+  exit 3
+fi
+if [[ -L "${DEPLOY_LOCK_PATH}" ]] || \
+   { [[ -e "${DEPLOY_LOCK_PATH}" ]] && [[ ! -f "${DEPLOY_LOCK_PATH}" ]]; }; then
+  echo "部署锁路径不是受控普通文件：${DEPLOY_LOCK_PATH}" >&2
+  exit 3
+fi
+if [[ "${WKM_DEPLOY_LOCK_INHERITED:-0}" == "1" ]]; then
+  if [[ ! "${WKM_DEPLOY_LOCK_FD:-}" =~ ^[0-9]+$ ]] || \
+     (( WKM_DEPLOY_LOCK_FD < 3 )) || \
+     [[ ! "${WKM_DEPLOY_LOCK_TOKEN:-}" =~ ^[0-9]+:[0-9]+$ ]] || \
+     [[ ! -e "/proc/$$/fd/${WKM_DEPLOY_LOCK_FD}" ]]; then
+    echo "继承的部署锁描述符不完整。" >&2
+    exit 3
+  fi
+  LOCK_FD_TARGET="$(readlink -f -- "/proc/$$/fd/${WKM_DEPLOY_LOCK_FD}" 2>/dev/null || true)"
+  LOCK_FD_TOKEN="$(stat -Lc '%d:%i' -- "/proc/$$/fd/${WKM_DEPLOY_LOCK_FD}" 2>/dev/null || true)"
+  LOCK_PATH_TOKEN="$(stat -Lc '%d:%i' -- "${DEPLOY_LOCK_PATH}" 2>/dev/null || true)"
+  if [[ "${LOCK_FD_TARGET}" != "${DEPLOY_LOCK_PATH}" || \
+        "${LOCK_FD_TOKEN}" != "${WKM_DEPLOY_LOCK_TOKEN}" || \
+        "${LOCK_PATH_TOKEN}" != "${WKM_DEPLOY_LOCK_TOKEN}" ]] || \
+     ! flock -n "${WKM_DEPLOY_LOCK_FD}"; then
+    echo "继承的部署锁未指向已加锁的受控文件。" >&2
+    exit 5
+  fi
+else
+  exec {INSTALL_DEPLOY_LOCK_FD}<>"${DEPLOY_LOCK_PATH}"
+  chmod 0600 "${DEPLOY_LOCK_PATH}"
+  if ! flock -n "${INSTALL_DEPLOY_LOCK_FD}"; then
+    echo "另一个 WeChatMemory 授权服务部署正在运行。" >&2
+    exit 5
+  fi
+fi
+
 if [[ -n "${STAGED_KEY}" ]] && \
    { [[ -e "${STAGED_KEY}" ]] || [[ -L "${STAGED_KEY}" ]]; }; then
   # Validate the first-use source before creating users, directories, release
@@ -254,11 +297,14 @@ fi
 # only now so later migration and systemd execution can use the interpreter as
 # wkm-license without granting that account ownership or write access.
 wkm_prepare_root_owned_runtime_venv "${RELEASE_VENV}" wkm-license
-if ! /usr/sbin/runuser -u wkm-license -- /usr/bin/env \
-  PYTHONDONTWRITEBYTECODE=1 \
-  "${RELEASE_VENV}/bin/python" -c \
-  'import license_server; assert license_server.__version__'; then
-  echo "wkm-license 无法读取或执行候选 Python venv，拒绝进入 migration。" >&2
+if ! (
+  cd "${RELEASE_DIR}"
+  /usr/sbin/runuser -u wkm-license -- /usr/bin/env \
+    PYTHONDONTWRITEBYTECODE=1 \
+    "${RELEASE_VENV}/bin/python" -c \
+    'import license_server; from scripts.service_preflight import validate_wsgi_runtime; validate_wsgi_runtime(); assert license_server.__version__'
+); then
+  echo "wkm-license 无法完整导入候选 Python 运行时，拒绝进入 migration。" >&2
   exit 3
 fi
 if [[ ! -f "${KEY_PATH}" ]]; then
@@ -379,6 +425,19 @@ rollback_install_runtime() {
   local failed=0
   echo "候选发布失败，正在恢复应用指针、配置、systemd 单元和服务状态。" >&2
   set +e
+  # A Python venv launched through ``current`` retains that symlink in
+  # sys.prefix even though its working directory resolves to the physical
+  # release.  Stop every project unit that can launch Python before changing
+  # the link, otherwise an in-flight import can combine application code from
+  # one release with site-packages from another release.
+  if ! wkm_stop_systemd_units_and_verify_inactive \
+      wechat-memory-license-backup.timer \
+      wechat-memory-license-backup.service \
+      wechat-memory-license.service; then
+    echo "无法确认候选运行进程已全部停止；拒绝恢复 current、环境或 unit，事务快照保留。" >&2
+    set -e
+    return 1
+  fi
   wkm_tx_restore_link "${INSTALL_TRANSACTION_DIR}" "${CURRENT_LINK}" current || failed=1
   wkm_tx_restore_file "${INSTALL_TRANSACTION_DIR}" "${ENV_PATH}" environment || failed=1
   wkm_tx_restore_file "${INSTALL_TRANSACTION_DIR}" "${SERVICE_UNIT}" service-unit || failed=1
@@ -449,8 +508,41 @@ RATE_LIMIT_GLOBAL_PER_MINUTE=$(env_value RATE_LIMIT_GLOBAL_PER_MINUTE 1000)
 RATE_LIMIT_MAX_KEYS=$(env_value RATE_LIMIT_MAX_KEYS 4096)
 SIGNING_KEY_ID=${KEY_ID}
 SIGNING_PRIVATE_KEY_PATH=${KEY_PATH}
-SIGNING_PUBLIC_KEYS_PATH=${CURRENT_LINK}/config/signing-public-keys.json
+SIGNING_PUBLIC_KEYS_PATH=${MANIFEST_PATH}
 EOF
+
+SERVICE_UNIT_TEMPLATE="${RELEASE_DIR}/deploy/el9/wechat-memory-license.service.example"
+SERVICE_UNIT_RENDERED="${INSTALL_TRANSACTION_DIR}/wechat-memory-license.service"
+if [[ ! "${RELEASE_ID}" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9]+$ ]] || \
+   [[ "${RELEASE_DIR}" != "${APP_ROOT}/releases/${RELEASE_ID}" ]]; then
+  echo "候选发布目录不符合 systemd 渲染约束。" >&2
+  exit 3
+fi
+if ! grep -Fq '@WKM_RELEASE_DIR@' "${SERVICE_UNIT_TEMPLATE}"; then
+  echo "systemd 单元模板缺少受控发布目录占位符。" >&2
+  exit 3
+fi
+sed "s|@WKM_RELEASE_DIR@|${RELEASE_DIR}|g" \
+  "${SERVICE_UNIT_TEMPLATE}" >"${SERVICE_UNIT_RENDERED}"
+if grep -Eq '@WKM_[A-Z0-9_]+@|/opt/wechat-memory-license/current' \
+    "${SERVICE_UNIT_RENDERED}"; then
+  echo "systemd 单元模板未完整渲染或仍引用 current。" >&2
+  exit 3
+fi
+
+# From this point onward every operation can change the active runtime or its
+# database contract.  Stop the scheduler first, then any already-running
+# backup oneshot, and finally the API.  Do not write service.env, migrate the
+# database, install units or switch current until systemd confirms all three
+# units are inactive.
+if ! wkm_stop_systemd_units_and_verify_inactive \
+    wechat-memory-license-backup.timer \
+    wechat-memory-license-backup.service \
+    wechat-memory-license.service; then
+  echo "无法确认旧版运行进程已全部停止，拒绝切换发布。" >&2
+  exit 4
+fi
+
 install -o root -g wkm-license -m 0640 "${ENV_TMP}" "${ENV_PATH}"
 rm -f -- "${ENV_TMP}"
 wkm_deploy_checkpoint after_environment_install
@@ -469,8 +561,7 @@ DATABASE_MIGRATION_ATTEMPTED=1
   --env "${ENV_PATH}" --manifest "${MANIFEST_PATH}"
 
 install -o root -g root -m 0644 \
-  "${RELEASE_DIR}/deploy/el9/wechat-memory-license.service.example" \
-  /etc/systemd/system/wechat-memory-license.service
+  "${SERVICE_UNIT_RENDERED}" /etc/systemd/system/wechat-memory-license.service
 install -o root -g root -m 0755 \
   "${RELEASE_DIR}/deploy/el9/wkm-license-admin" \
   /usr/local/sbin/wkm-license-admin

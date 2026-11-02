@@ -1,6 +1,6 @@
 # WeChatMemory 授权服务原理、接口与运维设计
 
-> 基线：License Server `0.2.6` / Client `0.3.5`
+> 基线：License Server `0.2.7` / Client `0.3.5`
 > 公网入口：`http://104.244.90.172:9000`
 > 存储：单机 SQLite3，客户聊天数据不上云。
 > 文档导航见 [`README.md`](README.md)，生产操作见
@@ -193,11 +193,14 @@ RATE_LIMIT_GLOBAL_PER_MINUTE=1000
 RATE_LIMIT_MAX_KEYS=4096
 SIGNING_KEY_ID=2026-10-30
 SIGNING_PRIVATE_KEY_PATH=/etc/wechat-memory-license/signing-ed25519-2026-10-30.pem
-SIGNING_PUBLIC_KEYS_PATH=/opt/wechat-memory-license/current/config/signing-public-keys.json
+SIGNING_PUBLIC_KEYS_PATH=/opt/wechat-memory-license/releases/20261031T000000Z-12345/config/signing-public-keys.json
 ```
 
 Waitress 的监听地址固定在 systemd 单元的 `127.0.0.1:9100`，不由 `service.env`
 覆盖。公网 IP、端口和 URL 由部署参数与 Nginx 配置管理；未接入运行时的配置项不写入环境文件。
+上面的 release ID 只是格式示例；部署器会把公钥清单、解释器、工作目录、启动预检和主进程全部
+渲染为本次不可变 release 的同一个物理路径。生产进程不会通过 `current` 继续解析依赖；`current`
+只作为当前版本发现指针，管理员入口也只解析一次后使用固定路径。
 
 `LICENSE_TICKET_HOURS` 是在线票据时长，不是用户套餐有效期。服务端会把订阅票据截断在权益到期时间内。
 `REFRESH_TOKEN_DAYS` 是设备刷新凭据最长生命周期，新部署默认 365 天；这保证
@@ -216,12 +219,14 @@ Waitress 的监听地址固定在 systemd 单元的 `127.0.0.1:9100`，不由 `s
 
 1. 在开发环境执行单元测试、Shell 语法和文档契约检查。
 2. 只把已审核变更提交到 `main`；服务器 `/data/WeChatMemory-LicenseServer` 保持干净。
-3. 运行 `deploy/el9/deploy-from-data.sh`；它执行 fast-forward、SQLite `.backup`、完整性检查、
+3. 运行 `deploy/el9/deploy-from-data.sh`；它先取得全局排他部署锁，再执行 fast-forward、SQLite `.backup`、完整性检查、
    不可变 release 创建、`requirements.lock` 精确约束、release 内独立 `.venv` 安装、
    确定性候选权限白名单、`root:wkm-license` 且组只读可执行的 venv、以 `wkm-license` 非 root 运行的 SBOM/全测、严格编译/Shell/事务门禁、
+   Waitress 已安装 distribution 原始 `RECORD` 的文件存在性/大小/SHA-256 校验和真实启动导入链、
    migration ledger 原生 SQL/旧库结构合同 SHA-256 校验、
-   `current` 原子切换和 systemd 重启。
-4. 候选服务启动、本机 `/readyz/deep`、Nginx 切换或公网验收失败时，补偿事务恢复
+   `current` 原子切换、固定物理 release 的 systemd 单元渲染和重启。
+4. 候选服务启动、本机 `/readyz/deep`、Nginx 切换或公网验收失败时，补偿事务先停止备份 timer、
+   正在执行的备份 oneshot 与 API 进程，再恢复
    `current`、`service.env`、systemd 单元/服务状态、Nginx 配置/服务状态，以及 existing 模式
    覆盖前的 TLS 证书与私钥；从旧 TLS 切换到默认 HTTP 时，项目专属 Certbot timer 也在事务中
    停用，失败则恢复原文件与启停状态。

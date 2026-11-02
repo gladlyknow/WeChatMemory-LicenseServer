@@ -93,6 +93,37 @@ if [[ ! -d "${SOURCE_DIR}/.git" || ! -f "${SOURCE_DIR}/deploy/el9/one-click-depl
   echo "找不到完整的服务端 Git 工作树：${SOURCE_DIR}" >&2
   exit 3
 fi
+
+# Hold the same deployment lock across source update, release installation and
+# public acceptance.  Without this outer boundary two recommended entrypoints
+# could race in git fetch/merge before the inner host-mutation lock exists.
+if ! command -v flock >/dev/null 2>&1; then
+  echo "缺少 flock，无法对授权服务部署加排他锁。" >&2
+  exit 3
+fi
+DEPLOY_LOCK_PATH=/run/wechat-memory-license-deploy.lock
+if [[ -L "${DEPLOY_LOCK_PATH}" ]] || \
+   { [[ -e "${DEPLOY_LOCK_PATH}" ]] && [[ ! -f "${DEPLOY_LOCK_PATH}" ]]; }; then
+  echo "部署锁路径不是受控普通文件：${DEPLOY_LOCK_PATH}" >&2
+  exit 3
+fi
+exec {DEPLOY_LOCK_FD}<>"${DEPLOY_LOCK_PATH}"
+chmod 0600 "${DEPLOY_LOCK_PATH}"
+if ! flock -n "${DEPLOY_LOCK_FD}"; then
+  echo "另一个 WeChatMemory 授权服务部署正在运行，拒绝并发更新源码。" >&2
+  exit 5
+fi
+WKM_DEPLOY_LOCK_TOKEN="$(stat -Lc '%d:%i' -- "/proc/$$/fd/${DEPLOY_LOCK_FD}" 2>/dev/null || true)"
+if [[ ! "${WKM_DEPLOY_LOCK_TOKEN}" =~ ^[0-9]+:[0-9]+$ ]] || \
+   [[ "$(stat -Lc '%d:%i' -- "${DEPLOY_LOCK_PATH}" 2>/dev/null || true)" != \
+      "${WKM_DEPLOY_LOCK_TOKEN}" ]]; then
+  echo "无法确认部署锁的文件身份。" >&2
+  exit 5
+fi
+export WKM_DEPLOY_LOCK_INHERITED=1
+export WKM_DEPLOY_LOCK_FD="${DEPLOY_LOCK_FD}"
+export WKM_DEPLOY_LOCK_TOKEN
+
 if [[ -n "$(git -C "${SOURCE_DIR}" status --porcelain)" ]]; then
   echo "源码工作树不干净，拒绝部署未审核的本地变更。" >&2
   exit 3

@@ -14,15 +14,15 @@
 
 ## 当前生产部署基线
 
-- 服务端：`0.2.6`，SQLite schema `3`
+- 服务端：`0.2.7`，SQLite schema `3`
 - 服务器：`104.244.90.172`
 - 公网 Web/API：`http://104.244.90.172:9000`
 - 内部应用：`127.0.0.1:9100`，不对公网开放
 - SQLite3：服务器本机持久磁盘，只允许内部应用进程访问
 
 端点兼容性是硬门禁：Client `0.3.5` 只允许固定
-`http://104.244.90.172:9000`；Client `0.3.4` 及更旧版固定 HTTPS，不能向 Server `0.2.6`
-的默认 HTTP 入口刷新。如已有生产用户，必须协调发布 Client `0.3.5` 与 Server `0.2.6`，
+`http://104.244.90.172:9000`；Client `0.3.4` 及更旧版固定 HTTPS，不能向 Server `0.2.7`
+的默认 HTTP 入口刷新。如已有生产用户，必须协调发布 Client `0.3.5` 与 Server `0.2.7`，
 切换窗口内只能依靠已验签且仍在 `offline_until` 内的离线票据过渡。尚无生产用户时不构成部署阻断。
 
 当前按产品决策默认使用 `HTTP :9000`，Nginx 反向代理到只监听回环地址的应用。WebSocket 不是
@@ -31,6 +31,11 @@ Ed25519 可以防止授权票据被伪造，但 HTTP 无法防止链路旁路者
 应至少使用云安全组限制来源。`--tls-mode letsencrypt|existing` 只是未来路径：必须先发布内置
 匹配 HTTPS origin/信任策略的新客户端，然后才能在服务端传入 `--ack-client-https-origin-ready`。
 当前 Client `0.3.5` 不兼容 TLS 入口。
+
+生产服务不会通过可变的 `current/.venv` 长期运行。部署器会把 systemd 单元、解释器、应用目录和
+公开密钥清单全部渲染为同一个不可变 release 的物理路径；`current` 只用于管理员发现当前版本。
+正常切换和回滚都必须先停止备份定时器、正在执行的备份 oneshot 与 API，再恢复指针和单元，
+避免进程在导入期间混用两个 release。
 详细拓扑、安全规则和客户端权限刷新协议见
 [`docs/DEPLOYMENT_104.244.90.172.md`](docs/DEPLOYMENT_104.244.90.172.md)。可选 TLS 的逐条手册见
 [`docs/MANUAL_DEPLOY_EL9_IP_CERT.md`](docs/MANUAL_DEPLOY_EL9_IP_CERT.md)。
@@ -53,8 +58,8 @@ proprietary 工程许可基线、第三方依赖来源、离线 SPDX 生成和�
 若首次从已停用的 `entity-echo.com` 接管 `104.244.90.172` 时冲突文件仍存在，必须显式传入
 `--retire-nginx-conf /etc/nginx/conf.d/entityecho.conf`。它会在移出 active `conf.d` 前创建事务快照，
 失败时恢复原字节和 Nginx 运行态，成功时在 `/etc/wechat-memory-license/retired-nginx/`
-保留可恢复副本与记录。当前服务器上该文件已由管理员删除，现行命令不传此参数。
-此参数最多只用一次，普通升级不得重复传入。
+保留可恢复副本与记录。每次以只读检查为准：文件存在且整个旧站确已停用时，本次首次接管命令必须
+传该参数；文件不存在时不得传。此参数最多只用一次，普通升级不得重复传入。
 
 本仓库是独立商业实现的起点。根 `LICENSE` 是 proprietary 工程发布基线，不代表法律已批准。
 客户 EULA、隐私政策和属地商业条款仍须在权利链审计和人工法律复核后定稿；当前不从 GPL 原型仓库

@@ -7,11 +7,53 @@ if [[ ${EUID} -ne 0 ]]; then
   exit 2
 fi
 
-PYTHON=/opt/wechat-memory-license/current/.venv/bin/python
-ADMIN=/opt/wechat-memory-license/current/license_admin.py
+APP_ROOT=/opt/wechat-memory-license
+RELEASE_ROOT="${APP_ROOT}/releases"
+CURRENT_LINK="${APP_ROOT}/current"
 DATABASE=/var/lib/wechat-memory-license/license.sqlite3
 ACTOR="${SUDO_USER:-root}"
+DEPLOY_LOCK_PATH=/run/wechat-memory-license-deploy.lock
 
+# Administrator writes may run concurrently with each other under SQLite, but
+# never with a release migration or runtime switch.  A shared lock also lets
+# the backup oneshot call this wrapper while its own shared lock is held.
+if ! command -v flock >/dev/null 2>&1; then
+  echo "缺少 flock，无法确认授权数据库当前可安全管理。" >&2
+  exit 3
+fi
+if [[ -L "${DEPLOY_LOCK_PATH}" ]] || \
+   { [[ -e "${DEPLOY_LOCK_PATH}" ]] && [[ ! -f "${DEPLOY_LOCK_PATH}" ]]; }; then
+  echo "部署锁路径不是受控普通文件。" >&2
+  exit 3
+fi
+exec {ADMIN_LOCK_FD}<>"${DEPLOY_LOCK_PATH}"
+chmod 0600 "${DEPLOY_LOCK_PATH}"
+if ! flock -s -n "${ADMIN_LOCK_FD}"; then
+  echo "授权服务正在部署或迁移，请稍后重试管理命令。" >&2
+  exit 5
+fi
+
+if [[ ! -L "${CURRENT_LINK}" || ! -d "${RELEASE_ROOT}" || -L "${RELEASE_ROOT}" ]]; then
+  echo "授权服务尚未完整安装。" >&2
+  exit 3
+fi
+
+# Resolve the active release exactly once.  Python virtual environments retain
+# the spelling of their launch path in sys.prefix; using ``current`` again for
+# the script could therefore mix two releases if deployment switches the link
+# between these lookups.
+RELEASE_DIR="$(readlink -e -- "${CURRENT_LINK}" 2>/dev/null || true)"
+RELEASE_NAME="${RELEASE_DIR#"${RELEASE_ROOT}/"}"
+if [[ -z "${RELEASE_DIR}" || "${RELEASE_DIR}" != "${RELEASE_ROOT}/${RELEASE_NAME}" || \
+      "${RELEASE_NAME}" == */* || \
+      ! "${RELEASE_NAME}" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9]+$ || \
+      ! -d "${RELEASE_DIR}" || -L "${RELEASE_DIR}" ]]; then
+  echo "当前发布指针不符合受控 release 目录约束。" >&2
+  exit 3
+fi
+
+PYTHON="${RELEASE_DIR}/.venv/bin/python"
+ADMIN="${RELEASE_DIR}/license_admin.py"
 if [[ ! -x "${PYTHON}" || ! -f "${ADMIN}" || ! -f "${DATABASE}" ]]; then
   echo "授权服务尚未完整安装。" >&2
   exit 3

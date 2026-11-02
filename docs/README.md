@@ -56,18 +56,20 @@ SQLite schema 或套餐变更必须同时修改代码、测试、统一手册和
 
 ```bash
 cd /data/WeChatMemory-LicenseServer
+WKM_RELEASE="$(readlink -e /opt/wechat-memory-license/current)"
+test -n "${WKM_RELEASE}"
 bash -n deploy/el9/*.sh deploy/el9/wkm-license-admin
 python3.11 scripts/check_documentation.py
-/opt/wechat-memory-license/current/.venv/bin/python -m unittest discover -s tests -v
-/opt/wechat-memory-license/current/.venv/bin/python scripts/generate_sbom.py \
+"${WKM_RELEASE}/.venv/bin/python" -m unittest discover -s tests -v
+"${WKM_RELEASE}/.venv/bin/python" scripts/generate_sbom.py \
   --check sbom/server-runtime.spdx.json
-/opt/wechat-memory-license/current/.venv/bin/python -m license_server signing-key manifest \
+"${WKM_RELEASE}/.venv/bin/python" -m license_server signing-key manifest \
   --manifest config/signing-public-keys.json
 git diff --check
 git status --short
 ```
 
-上述 `/opt/wechat-memory-license/current/.venv` 是当前 release 自己的独立环境；每个候选 release
+上述命令只解析一次 `current` 并固定到对应物理 release；每个候选 release
 必须使用自己的 `.venv` 做测试和 SBOM 比对，不能污染正在运行的版本。首次部署前，完整单元测试必须在
 开发/发布机的项目 `.venv` 中完成；目标 EL9 上的无依赖文档门禁固定使用 `python3.11`。
 候选树的可执行位不信任压缩包元数据：发布器强制应用审计白名单，并且以 `wkm-license`

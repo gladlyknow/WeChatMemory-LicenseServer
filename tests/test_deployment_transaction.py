@@ -23,7 +23,7 @@ class DeploymentTransactionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("deployment transaction self-test: ok", result.stdout)
 
-    def test_release_dependencies_are_isolated_and_runtime_uses_current(self) -> None:
+    def test_release_dependencies_are_isolated_and_runtime_is_pinned(self) -> None:
         installer = (ROOT / "deploy/el9/install-release.sh").read_text(
             encoding="utf-8"
         )
@@ -65,7 +65,7 @@ class DeploymentTransactionTests(unittest.TestCase):
             '"${RELEASE_VENV}/bin/python" -m license_server signing-key verify'
         )
         runtime_probe = installer.index(
-            "import license_server; assert license_server.__version__"
+            "from scripts.service_preflight import validate_wsgi_runtime;"
         )
         migration = installer.index("DATABASE_MIGRATION_ATTEMPTED=1")
         self.assertLess(test_copy, test_permissions)
@@ -82,17 +82,103 @@ class DeploymentTransactionTests(unittest.TestCase):
         self.assertIn("bash deploy/el9/test-deployment-transaction.sh", installer)
         self.assertNotIn('"${APP_ROOT}/venv/bin/pip"', installer)
         self.assertNotIn('"${APP_ROOT}/venv/bin/python"', installer)
+        self.assertIn("WorkingDirectory=@WKM_RELEASE_DIR@", service)
         self.assertIn(
-            "ExecStart=/opt/wechat-memory-license/current/.venv/bin/python",
+            "ExecStart=@WKM_RELEASE_DIR@/.venv/bin/python", service
+        )
+        self.assertIn(
+            "ExecStartPre=@WKM_RELEASE_DIR@/.venv/bin/python", service
+        )
+        self.assertIn("@WKM_RELEASE_DIR@/scripts/service_preflight.py", service)
+        self.assertIn(
+            "--manifest @WKM_RELEASE_DIR@/config/signing-public-keys.json",
             service,
         )
-        self.assertIn("ExecStartPre=/opt/wechat-memory-license/current/.venv/bin/python", service)
-        self.assertIn("/current/scripts/service_preflight.py", service)
-        self.assertIn("--manifest /opt/wechat-memory-license/current/config/signing-public-keys.json", service)
+        self.assertNotIn("/opt/wechat-memory-license/current", service)
         self.assertIn("Environment=PYTHONDONTWRITEBYTECODE=1", service)
         self.assertIn(
-            "PYTHON=/opt/wechat-memory-license/current/.venv/bin/python", admin
+            "SIGNING_PUBLIC_KEYS_PATH=${MANIFEST_PATH}", installer
         )
+        self.assertIn(
+            'sed "s|@WKM_RELEASE_DIR@|${RELEASE_DIR}|g"', installer
+        )
+        self.assertIn(
+            "systemd 单元模板未完整渲染或仍引用 current", installer
+        )
+        self.assertEqual(admin.count('readlink -e -- "${CURRENT_LINK}"'), 1)
+        self.assertIn('PYTHON="${RELEASE_DIR}/.venv/bin/python"', admin)
+        self.assertIn('ADMIN="${RELEASE_DIR}/license_admin.py"', admin)
+        self.assertIn("^[0-9]{8}T[0-9]{6}Z-[0-9]+$", admin)
+        self.assertNotIn("current/.venv", admin)
+        self.assertIn(
+            "from scripts.service_preflight import validate_wsgi_runtime", installer
+        )
+
+    def test_rendered_service_keeps_one_release_across_current_switch(self) -> None:
+        template = (
+            ROOT / "deploy/el9/wechat-memory-license.service.example"
+        ).read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            releases = root / "releases"
+            release_a = releases / "20261030T120000Z-100"
+            release_b = releases / "20261030T120001Z-101"
+            for release, marker in ((release_a, "a"), (release_b, "b")):
+                site = release / "site"
+                site.mkdir(parents=True)
+                (site / "release_marker.py").write_text(
+                    f'VALUE = "{marker}"\n', encoding="utf-8"
+                )
+
+            current = root / "current"
+            current.symlink_to(release_a, target_is_directory=True)
+            rendered = template.replace("@WKM_RELEASE_DIR@", str(release_a))
+            self.assertNotIn("@WKM_RELEASE_DIR@", rendered)
+            self.assertNotIn(str(current), rendered)
+            working_directory = next(
+                line.split("=", 1)[1]
+                for line in rendered.splitlines()
+                if line.startswith("WorkingDirectory=")
+            )
+            self.assertEqual(Path(working_directory), release_a)
+
+            program = (
+                "import sys\n"
+                "sys.path.insert(0, sys.argv[1])\n"
+                "print('ready', flush=True)\n"
+                "sys.stdin.readline()\n"
+                "import release_marker\n"
+                "print(release_marker.VALUE, flush=True)\n"
+            )
+
+            def import_after_switch(search_path: Path) -> str:
+                current_next = root / "current.next"
+                if current_next.exists() or current_next.is_symlink():
+                    current_next.unlink()
+                current_next.symlink_to(release_a, target_is_directory=True)
+                os.replace(current_next, current)
+                process = subprocess.Popen(
+                    [os.sys.executable, "-c", program, str(search_path)],
+                    cwd=working_directory,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                assert process.stdout is not None
+                self.assertEqual(process.stdout.readline().strip(), "ready")
+                current_next.symlink_to(release_b, target_is_directory=True)
+                os.replace(current_next, current)
+                stdout, stderr = process.communicate("\n", timeout=5)
+                self.assertEqual(process.returncode, 0, stderr)
+                return stdout.strip()
+
+            # The dynamic path demonstrates the original failure mechanism;
+            # the rendered WorkingDirectory remains pinned to release A.
+            self.assertEqual(import_after_switch(current / "site"), "b")
+            self.assertEqual(
+                import_after_switch(Path(working_directory) / "site"), "a"
+            )
 
     def test_release_permission_policy_is_deterministic_and_fail_closed(self) -> None:
         policy = ROOT / "deploy/el9/release-permissions.sh"
@@ -253,7 +339,7 @@ class DeploymentTransactionTests(unittest.TestCase):
         self.assertIn("--host 127.0.0.1 --port 9100", service)
         self.assertIn("Type=exec", service)
         self.assertIn(
-            "AssertPathExists=/opt/wechat-memory-license/current/license_server/__main__.py",
+            "AssertPathExists=@WKM_RELEASE_DIR@/license_server/__main__.py",
             service,
         )
         self.assertNotIn("ConditionPathExists=", service)
@@ -261,7 +347,7 @@ class DeploymentTransactionTests(unittest.TestCase):
             "scripts/service_preflight.py --env /etc/wechat-memory-license/service.env",
             service,
         )
-        self.assertNotIn("ExecStartPre=/opt/wechat-memory-license/current/.venv/bin/python -c", service)
+        self.assertNotIn("/opt/wechat-memory-license/current", service)
         self.assertIn("REFRESH_TOKEN_DAYS=365", example)
         self.assertIn("REFRESH_TOKEN_DAYS=$(env_value REFRESH_TOKEN_DAYS 365)", installer)
 
@@ -290,6 +376,9 @@ class DeploymentTransactionTests(unittest.TestCase):
         service_preflight = installer.index(
             '"${RELEASE_DIR}/scripts/service_preflight.py"'
         )
+        unit_render = installer.index(
+            'sed "s|@WKM_RELEASE_DIR@|${RELEASE_DIR}|g"'
+        )
         switch = installer.index(
             'mv -Tf "${CURRENT_LINK}.next" "${CURRENT_LINK}"'
         )
@@ -307,12 +396,22 @@ class DeploymentTransactionTests(unittest.TestCase):
         self.assertLess(shell_gate, transaction_gate)
         self.assertLess(transaction_gate, environment_install)
         self.assertLess(sbom_gate, environment_install)
+        self.assertLess(unit_render, migration)
         self.assertLess(environment_install, migration)
         self.assertLess(migration, service_preflight)
         self.assertLess(service_preflight, switch)
         self.assertLess(migration, switch)
         self.assertLess(switch, local_acceptance)
         self.assertLess(local_acceptance, commit)
+        normal_stop = installer.index(
+            "wkm_stop_systemd_units_and_verify_inactive",
+            unit_render,
+        )
+        normal_stop_block = installer[normal_stop:environment_install]
+        self.assertIn("wechat-memory-license-backup.timer", normal_stop_block)
+        self.assertIn("wechat-memory-license-backup.service", normal_stop_block)
+        self.assertIn("wechat-memory-license.service", normal_stop_block)
+        self.assertLess(normal_stop, environment_install)
         self.assertIn("rollback_install_runtime", installer)
         self.assertIn("wkm_tx_restore_link", installer)
         self.assertIn("wkm_tx_restore_file", installer)
@@ -333,6 +432,19 @@ class DeploymentTransactionTests(unittest.TestCase):
             installer.index("systemctl restart wechat-memory-license"),
             installer.index("for _attempt in $(seq 1 30)"),
         )
+        rollback = installer.index("rollback_install_runtime()")
+        rollback_stop = installer.index(
+            "wkm_stop_systemd_units_and_verify_inactive", rollback
+        )
+        rollback_current_restore = installer.index(
+            'wkm_tx_restore_link "${INSTALL_TRANSACTION_DIR}" "${CURRENT_LINK}" current',
+            rollback,
+        )
+        rollback_stop_block = installer[rollback_stop:rollback_current_restore]
+        self.assertIn("wechat-memory-license-backup.timer", rollback_stop_block)
+        self.assertIn("wechat-memory-license-backup.service", rollback_stop_block)
+        self.assertIn("wechat-memory-license.service", rollback_stop_block)
+        self.assertLess(rollback_stop, rollback_current_restore)
 
     def test_one_click_failure_contract_spans_application_and_nginx(self) -> None:
         script = (ROOT / "deploy/el9/one-click-deploy.sh").read_text(
@@ -383,6 +495,223 @@ class DeploymentTransactionTests(unittest.TestCase):
         self.assertIn("SQLite init/migration", script)
         self.assertIn(".one-click-transaction.*", script)
         self.assertIn(".install-transaction.*", script)
+        rollback = script.index("restore_application_runtime()")
+        rollback_stop = script.index(
+            "wkm_stop_systemd_units_and_verify_inactive", rollback
+        )
+        rollback_current_restore = script.index(
+            'wkm_tx_restore_link "${APPLICATION_TRANSACTION_DIR}"', rollback
+        )
+        rollback_daemon_reload = script.index("systemctl daemon-reload", rollback)
+        rollback_state_restore = script.index(
+            "restore_one_click_unit_state wechat-memory-license", rollback
+        )
+        rollback_stop_block = script[rollback_stop:rollback_current_restore]
+        for unit in (
+            "wechat-memory-license-backup.timer",
+            "wechat-memory-license-backup.service",
+            "wechat-memory-license.service",
+            "wechat-memory-certbot-renew.timer",
+            "wechat-memory-certbot-renew.service",
+        ):
+            self.assertIn(unit, rollback_stop_block)
+        self.assertLess(rollback_stop, rollback_current_restore)
+        self.assertLess(rollback_current_restore, rollback_daemon_reload)
+        self.assertLess(rollback_daemon_reload, rollback_state_restore)
+
+    def test_one_click_serializes_host_mutations_with_kernel_lock(self) -> None:
+        script = (ROOT / "deploy/el9/one-click-deploy.sh").read_text(
+            encoding="utf-8"
+        )
+        lock = script.index("DEPLOY_LOCK_PATH=/run/wechat-memory-license-deploy.lock")
+        stale_transaction_check = script.index("STALE_TRANSACTIONS=(")
+        package_install = script.index("dnf install -y nginx")
+        application_capture = script.index("capture_application_runtime")
+        self.assertIn('exec {DEPLOY_LOCK_FD}<>"${DEPLOY_LOCK_PATH}"', script)
+        self.assertIn('flock -n "${DEPLOY_LOCK_FD}"', script)
+        self.assertIn('WKM_DEPLOY_LOCK_INHERITED:-0', script)
+        self.assertIn('export WKM_DEPLOY_LOCK_FD="${DEPLOY_LOCK_FD}"', script)
+        self.assertIn("[[ -L \"${DEPLOY_LOCK_PATH}\" ]]", script)
+        self.assertLess(lock, stale_transaction_check)
+        self.assertLess(lock, package_install)
+        self.assertLess(lock, application_capture)
+
+    def test_all_mutating_entrypoints_share_the_deployment_lock(self) -> None:
+        wrapper = (ROOT / "deploy/el9/deploy-from-data.sh").read_text(
+            encoding="utf-8"
+        )
+        one_click = (ROOT / "deploy/el9/one-click-deploy.sh").read_text(
+            encoding="utf-8"
+        )
+        installer = (ROOT / "deploy/el9/install-release.sh").read_text(
+            encoding="utf-8"
+        )
+        admin = (ROOT / "deploy/el9/wkm-license-admin").read_text(
+            encoding="utf-8"
+        )
+        backup = (ROOT / "deploy/el9/backup-database.sh").read_text(
+            encoding="utf-8"
+        )
+
+        wrapper_lock = wrapper.index(
+            "DEPLOY_LOCK_PATH=/run/wechat-memory-license-deploy.lock"
+        )
+        wrapper_status = wrapper.index('git -C "${SOURCE_DIR}" status --porcelain')
+        wrapper_fetch = wrapper.index('git -C "${SOURCE_DIR}" fetch')
+        self.assertLess(wrapper_lock, wrapper_status)
+        self.assertLess(wrapper_lock, wrapper_fetch)
+        self.assertIn("export WKM_DEPLOY_LOCK_INHERITED=1", wrapper)
+        self.assertIn('export WKM_DEPLOY_LOCK_FD="${DEPLOY_LOCK_FD}"', wrapper)
+        self.assertIn("export WKM_DEPLOY_LOCK_TOKEN", wrapper)
+
+        self.assertIn('WKM_DEPLOY_LOCK_INHERITED:-0', one_click)
+        self.assertIn('flock -n "${DEPLOY_LOCK_FD}"', one_click)
+        self.assertIn("WKM_DEPLOY_LOCK_TOKEN", one_click)
+        self.assertIn('WKM_DEPLOY_LOCK_INHERITED:-0', installer)
+        self.assertIn('flock -n "${WKM_DEPLOY_LOCK_FD}"', installer)
+        self.assertIn("WKM_DEPLOY_LOCK_TOKEN", installer)
+        self.assertIn('exec {INSTALL_DEPLOY_LOCK_FD}<>"${DEPLOY_LOCK_PATH}"', installer)
+        self.assertIn('flock -n "${INSTALL_DEPLOY_LOCK_FD}"', installer)
+        self.assertLess(
+            installer.index("DEPLOY_LOCK_PATH=/run/wechat-memory-license-deploy.lock"),
+            installer.index("APP_ROOT=/opt/wechat-memory-license"),
+        )
+
+        self.assertIn('flock -s -n "${ADMIN_LOCK_FD}"', admin)
+        self.assertIn('flock -s -n "${BACKUP_LOCK_FD}"', backup)
+        self.assertLess(admin.index("flock -s -n"), admin.index("readlink -e"))
+        self.assertLess(
+            backup.index("flock -s -n"), backup.index("/usr/bin/sqlite3")
+        )
+
+        # Re-locking the inherited descriptor is safe because it refers to the
+        # same open-file description.  A separately opened descriptor remains
+        # blocked, which is the serialization property the wrappers rely on.
+        with tempfile.TemporaryDirectory() as temporary:
+            lock_path = Path(temporary) / "deploy.lock"
+            probe = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    """
+set -euo pipefail
+exec {lock_fd}<>\"$1\"
+flock -n \"${lock_fd}\"
+WKM_DEPLOY_LOCK_FD=\"${lock_fd}\" bash -c 'flock -n \"${WKM_DEPLOY_LOCK_FD}\"'
+if bash -c 'exec {other_fd}<>\"$1\"; flock -n \"${other_fd}\"' bash \"$1\"; then
+  exit 9
+fi
+""",
+                    "bash",
+                    str(lock_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(probe.returncode, 0, probe.stderr)
+
+    def test_systemd_stop_gate_is_ordered_and_fail_closed(self) -> None:
+        helper = ROOT / "deploy/el9/deployment-transaction.sh"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bin_dir = root / "bin"
+            state_dir = root / "state"
+            bin_dir.mkdir()
+            state_dir.mkdir()
+            systemctl = bin_dir / "systemctl"
+            systemctl.write_text(
+                """#!/usr/bin/env bash
+set -euo pipefail
+command_name=\"$1\"
+unit=\"${2:-}\"
+case \"${command_name}\" in
+  show)
+    property=\"\"
+    for argument in \"$@\"; do
+      case \"${argument}\" in
+        --property=*) property=\"${argument#--property=}\" ;;
+      esac
+    done
+    case \"${property}\" in
+      LoadState) cat \"${WKM_SYSTEMD_STATE}/${unit}.load\" ;;
+      ActiveState) cat \"${WKM_SYSTEMD_STATE}/${unit}.active\" ;;
+      *) exit 2 ;;
+    esac
+    ;;
+  stop)
+    printf '%s\\n' \"${unit}\" >>\"${WKM_SYSTEMD_STATE}/calls\"
+    if [[ \"${unit}\" == \"${WKM_FAIL_UNIT:-}\" ]]; then
+      exit 1
+    fi
+    printf 'inactive\\n' >\"${WKM_SYSTEMD_STATE}/${unit}.active\"
+    ;;
+  *) exit 2 ;;
+esac
+""",
+                encoding="utf-8",
+            )
+            systemctl.chmod(0o700)
+
+            units = ("backup.timer", "backup.service", "api.service")
+            for unit, load, active in (
+                (units[0], "loaded", "active"),
+                # A missing unit file does not prove that an already-loaded
+                # process has stopped; the helper must still stop this state.
+                (units[1], "not-found", "active"),
+                (units[2], "loaded", "inactive"),
+            ):
+                (state_dir / f"{unit}.load").write_text(load + "\n", encoding="utf-8")
+                (state_dir / f"{unit}.active").write_text(
+                    active + "\n", encoding="utf-8"
+                )
+
+            environment = dict(os.environ)
+            environment["PATH"] = f"{bin_dir}:{environment['PATH']}"
+            environment["WKM_SYSTEMD_STATE"] = str(state_dir)
+            marker = root / "restored"
+            command = (
+                'source "$1"; '
+                'if ! wkm_stop_systemd_units_and_verify_inactive '
+                'backup.timer backup.service api.service; then exit 1; fi; '
+                'printf restored >"$2"'
+            )
+            result = subprocess.run(
+                ["bash", "-c", command, "bash", str(helper), str(marker)],
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                (state_dir / "calls").read_text(encoding="utf-8").splitlines(),
+                list(units),
+            )
+            self.assertEqual(marker.read_text(encoding="utf-8"), "restored")
+
+            # A failed stop prevents the simulated restore step.  It must not
+            # be downgraded to a warning while current/env/unit are changed.
+            marker.unlink()
+            (state_dir / "calls").unlink()
+            for unit in units:
+                (state_dir / f"{unit}.active").write_text(
+                    "active\n", encoding="utf-8"
+                )
+            environment["WKM_FAIL_UNIT"] = "backup.service"
+            result = subprocess.run(
+                ["bash", "-c", command, "bash", str(helper), str(marker)],
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(marker.exists())
+            self.assertEqual(
+                (state_dir / "calls").read_text(encoding="utf-8").splitlines(),
+                ["backup.timer", "backup.service"],
+            )
 
     def test_default_public_entry_is_http_without_certbot_dependency(self) -> None:
         script = (ROOT / "deploy/el9/one-click-deploy.sh").read_text(

@@ -113,6 +113,60 @@ if [[ ! -f "${SOURCE_DIR}/pyproject.toml" || ! -f "${SOURCE_DIR}/license_server/
   echo "--source 不是有效的授权服务源码目录。" >&2
   exit 2
 fi
+
+# Serialize every host mutation.  Transaction-directory discovery is not an
+# atomic lock: two deployments could otherwise both pass the initial stale
+# transaction check and later race while switching ``current`` or systemd.
+# The descriptor remains open across the child release installer and is
+# released automatically even when this shell exits because of an error.
+if ! command -v flock >/dev/null 2>&1; then
+  echo "缺少 flock，无法对授权服务部署加排他锁。" >&2
+  exit 3
+fi
+DEPLOY_LOCK_PATH=/run/wechat-memory-license-deploy.lock
+if [[ -L "${DEPLOY_LOCK_PATH}" ]] || \
+   { [[ -e "${DEPLOY_LOCK_PATH}" ]] && [[ ! -f "${DEPLOY_LOCK_PATH}" ]]; }; then
+  echo "部署锁路径不是受控普通文件：${DEPLOY_LOCK_PATH}" >&2
+  exit 3
+fi
+if [[ "${WKM_DEPLOY_LOCK_INHERITED:-0}" == "1" ]]; then
+  if [[ ! "${WKM_DEPLOY_LOCK_FD:-}" =~ ^[0-9]+$ ]] || \
+     (( WKM_DEPLOY_LOCK_FD < 3 )) || \
+     [[ ! "${WKM_DEPLOY_LOCK_TOKEN:-}" =~ ^[0-9]+:[0-9]+$ ]] || \
+     [[ ! -e "/proc/$$/fd/${WKM_DEPLOY_LOCK_FD}" ]]; then
+    echo "继承的部署锁描述符不完整。" >&2
+    exit 3
+  fi
+  DEPLOY_LOCK_FD="${WKM_DEPLOY_LOCK_FD}"
+  LOCK_FD_TARGET="$(readlink -f -- "/proc/$$/fd/${DEPLOY_LOCK_FD}" 2>/dev/null || true)"
+  LOCK_FD_TOKEN="$(stat -Lc '%d:%i' -- "/proc/$$/fd/${DEPLOY_LOCK_FD}" 2>/dev/null || true)"
+  LOCK_PATH_TOKEN="$(stat -Lc '%d:%i' -- "${DEPLOY_LOCK_PATH}" 2>/dev/null || true)"
+  if [[ "${LOCK_FD_TARGET}" != "${DEPLOY_LOCK_PATH}" || \
+        "${LOCK_FD_TOKEN}" != "${WKM_DEPLOY_LOCK_TOKEN}" || \
+        "${LOCK_PATH_TOKEN}" != "${WKM_DEPLOY_LOCK_TOKEN}" ]] || \
+     ! flock -n "${DEPLOY_LOCK_FD}"; then
+    echo "继承的部署锁未指向已加锁的受控文件。" >&2
+    exit 5
+  fi
+else
+  exec {DEPLOY_LOCK_FD}<>"${DEPLOY_LOCK_PATH}"
+  chmod 0600 "${DEPLOY_LOCK_PATH}"
+  if ! flock -n "${DEPLOY_LOCK_FD}"; then
+    echo "另一个 WeChatMemory 授权服务部署正在运行，拒绝并发修改主机状态。" >&2
+    exit 5
+  fi
+  WKM_DEPLOY_LOCK_TOKEN="$(stat -Lc '%d:%i' -- "/proc/$$/fd/${DEPLOY_LOCK_FD}" 2>/dev/null || true)"
+  if [[ ! "${WKM_DEPLOY_LOCK_TOKEN}" =~ ^[0-9]+:[0-9]+$ ]] || \
+     [[ "$(stat -Lc '%d:%i' -- "${DEPLOY_LOCK_PATH}" 2>/dev/null || true)" != \
+        "${WKM_DEPLOY_LOCK_TOKEN}" ]]; then
+    echo "无法确认部署锁的文件身份。" >&2
+    exit 5
+  fi
+fi
+export WKM_DEPLOY_LOCK_INHERITED=1
+export WKM_DEPLOY_LOCK_FD="${DEPLOY_LOCK_FD}"
+export WKM_DEPLOY_LOCK_TOKEN
+
 if [[ ! -f "${SOURCE_DIR}/deploy/el9/public-ip-safety.sh" ]]; then
   echo "源码缺少公网 IP 归属安全库。" >&2
   exit 3
@@ -503,6 +557,19 @@ restore_application_runtime() {
   fi
   echo "正在恢复部署前的应用、existing TLS、systemd 单元和服务状态。" >&2
   set +e
+  # Never move ``current`` or replace a project unit while one of its processes
+  # may still be running.  Stop schedulers before their oneshots, then the API;
+  # a failed or unclassifiable stop is a hard rollback boundary.
+  if ! wkm_stop_systemd_units_and_verify_inactive \
+      wechat-memory-license-backup.timer \
+      wechat-memory-license-backup.service \
+      wechat-memory-license.service \
+      wechat-memory-certbot-renew.timer \
+      wechat-memory-certbot-renew.service; then
+    echo "无法确认项目进程已全部停止；拒绝恢复 current、环境、hook 或 unit，事务快照保留。" >&2
+    set -e
+    return 1
+  fi
   wkm_tx_restore_link "${APPLICATION_TRANSACTION_DIR}" \
     /opt/wechat-memory-license/current current || failed=1
   wkm_tx_restore_file "${APPLICATION_TRANSACTION_DIR}" \
