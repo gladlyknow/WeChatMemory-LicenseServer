@@ -1,7 +1,7 @@
 # 跨仓库交付总览与文档治理规范
 
 > 基线日期：2026-11-02
-> 客户端：`WeChatMemory-Client 0.3.8`
+> 客户端：`WeChatMemory-Client 0.3.9`
 > 授权服务端：`WeChatMemory-LicenseServer 0.2.7`
 > 授权协议：`v1`；服务端 SQLite schema：`3`；公钥清单 schema：`1`
 
@@ -172,7 +172,7 @@ Windows 10/11 x64 上使用 x64 Python/PowerShell：
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File ".\packaging\windows\build.ps1" `
-  -Version "0.3.8" `
+  -Version "0.3.9" `
   -Edition NativeCandidate
 ```
 
@@ -182,7 +182,7 @@ helper 完整，不应通过降级为开发版规避预检。
 Ubuntu/Linux 构建：
 
 ```bash
-VERSION=0.3.8 ./packaging/linux/build.sh
+VERSION=0.3.9 ./packaging/linux/build.sh
 ```
 
 ### 3.5 跨端最终验收
@@ -196,7 +196,7 @@ VERSION=0.3.8 ./packaging/linux/build.sh
 
 | 层 | 当前基线 | 兼容要求 | 发布状态 |
 |---|---|---|---|
-| 客户端 | `0.3.8` | Windows 10/11 x64；Ubuntu/Linux x86_64 | Windows 为 NativeCandidate，须实机验收 |
+| 客户端 | `0.3.9` | Windows 10/11 x64；Ubuntu/Linux x86_64 | Windows 为 NativeCandidate，须实机验收 |
 | Windows 微信 | 4.x 读取框架 | 取钥门禁目前精确信任腾讯签名的 `Weixin.exe 4.1.0.34` 指定哈希 | 其他版本必须新增证据和门禁，不能默认放行 |
 | 授权服务端 | `0.2.7` | Enterprise Linux 9、Python 3.11、单主 SQLite | 手工部署 |
 | 公网接口 | `/v1/*` | HTTP `104.244.90.172:9000`；内部 `127.0.0.1:9100` | 明文风险已接受；未来 TLS 必须显式启用 |
@@ -210,8 +210,8 @@ VERSION=0.3.8 ./packaging/linux/build.sh
 ### 4.1 origin 兼容断点与发布顺序
 
 - Client `0.3.4` 及更旧版固定 HTTPS，不能向 Server `0.2.7` 的默认 HTTP origin 刷新；
-- Client `0.3.8` 精确只允许 `http://104.244.90.172:9000`，不兼容 Server `0.2.7` 的可选 TLS 入口；
-- 已有生产用户时，必须协调发布 Client `0.3.8` 和 Server `0.2.7`。切换窗口内，旧客户端只能依靠仍在
+- Client `0.3.9` 精确只允许 `http://104.244.90.172:9000`，不兼容 Server `0.2.7` 的可选 TLS 入口；
+- 已有生产用户时，必须协调发布 Client `0.3.9` 和 Server `0.2.7`。切换窗口内，旧客户端只能依靠仍在
   `offline_until` 内的已验签票据过渡；超出该窗口前必须完成升级。尚无生产用户时不构成部署阻断；
 - 未来切换 TLS 前，必须先发布内置匹配 HTTPS origin/信任策略的客户端，然后服务端才能显式传入
   `--ack-client-https-origin-ready`。该参数是 fail-closed 部署门禁，不代表部署器能自动验证客户端覆盖率。

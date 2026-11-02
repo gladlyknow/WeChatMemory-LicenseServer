@@ -69,7 +69,7 @@ systemd 单元在本次版本中由部署器渲染到上述物理 release。运�
 1. 专用测试用户的 `activate → 同码重放 401 → refresh → 旧 token 拒绝 → deactivate` 金丝雀；
 2. `after_application_switch`、`after_nginx_switch` 等现场故障注入与回滚证据；
 3. 手工触发一次数据库备份、检查备份完整性和恢复演练；
-4. Client `0.3.8` 最终 Windows/Ubuntu 包与该 HTTP 入口的实机联动；
+4. Client `0.3.9` 最终 Windows/Ubuntu 包与该 HTTP 入口的实机联动；
 5. HTTP 明文传输的架构风险。Ed25519 只保护授权票据真实性，不提供链路保密。
 
 这些项目必须继续按验收标准执行，不得用本记录中的健康检查替代。

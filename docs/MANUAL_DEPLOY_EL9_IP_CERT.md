@@ -3,7 +3,7 @@
 > 本文只适用于未来显式选择 `--tls-mode letsencrypt` 的可选路径。当前默认生产入口是
 > `http://104.244.90.172:9000`，默认一键部署不需要本文的 Certbot、80 端口或证书步骤。
 
-> **硬性兼容门禁：** Client `0.3.8` 只允许固定 HTTP origin，不兼容本文的 HTTPS 入口。必须先发布内置
+> **硬性兼容门禁：** Client `0.3.9` 只允许固定 HTTP origin，不兼容本文的 HTTPS 入口。必须先发布内置
 > 匹配 HTTPS origin/信任策略的新客户端，再使用 `--ack-client-https-origin-ready` 启用 TLS。
 > Client `0.3.4` 及更旧版虽固定 HTTPS，但也不能据此推断其 origin/信任根与本服务匹配。
 
@@ -360,7 +360,7 @@ git rev-parse --short HEAD
 
 ### 9.2 首次部署生产签名私钥
 
-客户端 `0.3.8` 生成信任根中的生产公钥必须与服务器私钥一致。将开发端忽略目录中的
+客户端 `0.3.9` 生成信任根中的生产公钥必须与服务器私钥一致。将开发端忽略目录中的
 `.secrets/signing-ed25519.pem` 通过受控通道上传为 `/root/wkm-signing-ed25519.pem`，不能经过 Git、聊天工具或工单传输。
 
 在服务器核对权限：
