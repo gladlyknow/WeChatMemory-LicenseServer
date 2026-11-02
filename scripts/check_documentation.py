@@ -39,7 +39,7 @@ SOURCE_DIRECTORY = "/data/WeChatMemory-LicenseServer"
 PUBLIC_ENDPOINT = "http://104.244.90.172:9000"
 RETIRED_PUBLIC_IP = "104.224.90.172"
 ADMIN_EMAIL = "gladlygrady@tutamail.com"
-CLIENT_VERSION = "0.3.5"
+CLIENT_VERSION = "0.3.6"
 RETIRED_CLIENT_VERSION = "0.3.4"
 LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
 SHELL_FENCE = re.compile(
@@ -189,7 +189,7 @@ def check_repository(root: Path = ROOT) -> list[str]:
                 text = _read(path, errors)
                 for expected in (
                     "--ack-client-https-origin-ready",
-                    "Client `0.3.5`",
+                    "Client `0.3.6`",
                 ):
                     if expected not in text:
                         errors.append(
